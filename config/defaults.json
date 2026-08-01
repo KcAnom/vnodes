@@ -1,0 +1,39 @@
+{
+  "_comment": "vnodes config defaults. Every value here is a snapshot parameter from the blueprint config-schema (captured 2026-07-31). Configurable — never hardcoded in source. Override per-project in .vnodes/config.json or via VNODES_* env vars.",
+  "capsule": {
+    "max_tokens": 8000,
+    "savings_baseline": "65-70%",
+    "skeleton_detail": "standard"
+  },
+  "llm": {
+    "extra_savings": "+30% typical",
+    "min_ram_gb": 6,
+    "download_size_gb": 3.5,
+    "intent_languages": 15
+  },
+  "mcp": {
+    "port": 7821,
+    "transport": "stdio"
+  },
+  "index": {
+    "max_file_size_kb": 512,
+    "first_run_target_s": 30,
+    "manifest_rebuild_target_s": 5
+  },
+  "log": {
+    "truncate_lines": 500,
+    "truncate_threshold_mb": 2,
+    "level": "warn"
+  },
+  "ui": {
+    "sidebar_refresh_s": 10
+  },
+  "filter_secrets": true,
+  "personal_mode": false,
+  "runtime": {
+    "_comment": "Owner build directive 3: switchable dual agentic runtime. provider: 'claude-code' (default, model claude-opus-5) or 'pi' (owner's .pi CLI). pi_model: 'grok-4.5-latest' or 'gpt-5.6-sol'. Flip via config or --runtime/--pi-model flags or VNODES_RUNTIME/VNODES_PI_MODEL env.",
+    "provider": "claude-code",
+    "claude_model": "claude-opus-5",
+    "pi_model": "grok-4.5-latest"
+  }
+}

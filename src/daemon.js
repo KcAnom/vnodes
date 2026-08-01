@@ -1,0 +1,190 @@
+'use strict';
+// M8 Daemon & Diagnostics. HTTP transport is opt-in on cfg.mcp.port (BR-012);
+// auto-restart when a tool call hits a stopped daemon (BR-024); read-only
+// doctor that works with the daemon down (BR-026). Also serves the minimal
+// M9 status UI at /ui (styling left on the design-system seam).
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const net = require('node:net');
+const { spawn, execFileSync } = require('node:child_process');
+const { loadConfig, findProjectRoot, engineDir } = require('./config');
+const { TOOL_DEFS, callTool } = require('./tools');
+const { indexStatus } = require('./indexer');
+const { loadWorkspace } = require('./workspace');
+const { log, logPath } = require('./logs');
+
+function pidFile(projectRoot) { return path.join(projectRoot, '.vnodes', 'daemon.pid'); }
+
+function daemonState(projectRoot) {
+  const pf = pidFile(projectRoot);
+  if (!fs.existsSync(pf)) return { running: false };
+  const { pid, port } = JSON.parse(fs.readFileSync(pf, 'utf8'));
+  try { process.kill(pid, 0); return { running: true, pid, port }; }
+  catch { return { running: false, stale_pidfile: true, pid, port }; }
+}
+
+function serve(projectRoot) {
+  const cfg = loadConfig(projectRoot);
+  const port = cfg.mcp.port;
+  const server = http.createServer((req, res) => {
+    const send = (code, body, type = 'application/json') => {
+      res.writeHead(code, { 'content-type': type });
+      res.end(type === 'application/json' ? JSON.stringify(body, null, 2) : body);
+    };
+    if (req.method === 'GET' && req.url === '/status') {
+      // UI must distinguish daemon-stopped from empty-index (ERR-005) — this
+      // endpoint answering at all means the daemon is up; body carries index state.
+      return send(200, { daemon: 'running', pid: process.pid, port, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
+    }
+    if (req.method === 'GET' && req.url === '/tools') return send(200, { tools: TOOL_DEFS });
+    if (req.method === 'GET' && req.url.startsWith('/ui')) {
+      if (req.url === '/ui/theme.css') return send(200, uiThemeCss(), 'text/css');
+      return send(200, uiHtml(cfg), 'text/html');
+    }
+    if (req.method === 'POST' && req.url === '/rpc') {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        try {
+          const { tool, arguments: args, session } = JSON.parse(body || '{}');
+          const result = callTool(projectRoot, tool, args || {}, session || 'http');
+          send(200, { ok: true, result });
+        } catch (e) {
+          log(projectRoot, 'daemon', `rpc error: ${e.message}`);
+          send(400, { ok: false, error: e.message });
+        }
+      });
+      return;
+    }
+    send(404, { error: 'not found', endpoints: ['/status', '/tools', '/rpc', '/ui'] });
+  });
+  server.on('error', e => {
+    if (e.code === 'EADDRINUSE') {
+      // Port taken (ERR-007): name the fix, don't crash silently.
+      log(projectRoot, 'daemon', `port ${port} in use — set VNODES_PORT or .vnodes/config.json mcp.port and restart`);
+      console.error(`vnodes daemon: port ${port} in use. Fix: set VNODES_PORT=<port> or "mcp": {"port": <port>} in .vnodes/config.json`);
+      process.exit(1);
+    }
+    throw e;
+  });
+  server.listen(port, '127.0.0.1', () => {
+    fs.writeFileSync(pidFile(projectRoot), JSON.stringify({ pid: process.pid, port }));
+    log(projectRoot, 'daemon', `daemon started pid=${process.pid} port=${port}`);
+    console.log(`vnodes daemon running on http://127.0.0.1:${port} (status: /status, ui: /ui)`);
+  });
+  const shutdown = () => {
+    log(projectRoot, 'daemon', 'daemon stopped');
+    try { fs.unlinkSync(pidFile(projectRoot)); } catch {}
+    process.exit(0);
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}
+
+function startDetached(projectRoot) {
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'vnodes.js'), 'daemon', 'run'],
+    { cwd: projectRoot, detached: true, stdio: 'ignore' });
+  child.unref();
+  return child.pid;
+}
+
+// Auto-restart contract (BR-024): call a tool over HTTP; if the daemon is down,
+// start it and retry.
+async function httpCall(projectRoot, tool, args, session) {
+  const cfg = loadConfig(projectRoot);
+  const attempt = () => fetch(`http://127.0.0.1:${cfg.mcp.port}/rpc`, {
+    method: 'POST', body: JSON.stringify({ tool, arguments: args, session }),
+  }).then(r => r.json());
+  try { return await attempt(); }
+  catch {
+    startDetached(projectRoot);
+    await new Promise(r => setTimeout(r, 700));
+    return attempt();
+  }
+}
+
+function stopDaemon(projectRoot) {
+  const st = daemonState(projectRoot);
+  if (!st.running) {
+    if (st.stale_pidfile) fs.unlinkSync(pidFile(projectRoot));
+    return { stopped: false, reason: st.stale_pidfile ? 'stale pidfile removed' : 'not running' };
+  }
+  process.kill(st.pid, 'SIGTERM');
+  return { stopped: true, pid: st.pid };
+}
+
+// Read-only doctor (BR-026, ERR-006): diagnoses without a running daemon.
+async function doctor(projectRoot) {
+  const cfg = loadConfig(projectRoot);
+  const checks = [];
+  const add = (name, ok, detail) => checks.push({ check: name, ok, detail });
+
+  add('config', !cfg._config_error, cfg._config_error || 'defaults + .vnodes/config.json parsed');
+  const st = indexStatus(projectRoot);
+  add('index', st.state === 'ready', `state: ${st.state}${st.nodes ? `, ${st.nodes} nodes / ${st.files} files / ${st.edges} edges` : ''}`);
+
+  const eng = path.join(projectRoot, '.vnodes');
+  const manifest = path.join(eng, 'manifest.json');
+  add('manifest', fs.existsSync(manifest), fs.existsSync(manifest) ? 'committed manifest present' : 'missing — run: vnodes index');
+
+  // Workspace drift: workspace.json repos that don't exist on disk.
+  const ws = loadWorkspace(projectRoot);
+  if (ws) {
+    const missing = ws.repos.filter(r => !fs.existsSync(path.resolve(ws.baseDir, r.path)));
+    add('workspace', missing.length === 0,
+      missing.length ? `drift: missing repos ${missing.map(r => r.alias).join(', ')}` : `workspace "${ws.name}" (${ws.repos.length} repos) resolves`);
+  }
+
+  const ds = daemonState(projectRoot);
+  add('daemon', true, ds.running ? `running pid=${ds.pid} port=${ds.port}` : ds.stale_pidfile ? `stale pidfile (pid ${ds.pid} dead) — will auto-restart on next tool call` : 'stopped — auto-restarts on tool call');
+
+  // Transport: is the configured port free or held by our daemon?
+  const portFree = await new Promise(res => {
+    const s = net.createServer().once('error', () => res(false)).once('listening', () => { s.close(); res(true); });
+    s.listen(cfg.mcp.port, '127.0.0.1');
+  });
+  add('transport', ds.running ? !portFree : portFree,
+    ds.running ? (portFree ? 'pidfile says running but port is free — kill stale daemon' : `port ${cfg.mcp.port} held by daemon`)
+      : (portFree ? `port ${cfg.mcp.port} free for HTTP transport (stdio is default)` : `port ${cfg.mcp.port} taken by another process — set VNODES_PORT`));
+
+  // Agent config presence.
+  const mcpJson = path.join(projectRoot, '.mcp.json');
+  let registered = false;
+  if (fs.existsSync(mcpJson)) {
+    try { registered = !!JSON.parse(fs.readFileSync(mcpJson, 'utf8')).mcpServers?.vnodes; } catch {}
+  }
+  add('agent-config', true, registered ? 'vnodes registered in project .mcp.json' : 'not in project .mcp.json — run: vnodes setup (or rely on user-scope registration)');
+
+  return { project: projectRoot, checks, healthy: checks.every(c => c.ok) };
+}
+
+function uiHtml(cfg) {
+  // M9 minimal surface. Styling deliberately absent: /ui/theme.css is the
+  // design-system insertion seam (owner build directive 2).
+  return `<!doctype html><html><head><meta charset="utf-8"><title>vnodes</title>
+<link rel="stylesheet" href="/ui/theme.css"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body><main>
+<h1>vnodes</h1><p id="state">loading…</p>
+<dl><dt>Files</dt><dd id="files">–</dd><dt>Nodes</dt><dd id="nodes">–</dd>
+<dt>Edges</dt><dd id="edges">–</dd><dt>Repos</dt><dd id="repos">–</dd>
+<dt>Last index</dt><dd id="last">–</dd></dl>
+<script>
+async function tick(){try{const r=await fetch('/status');const s=await r.json();
+document.getElementById('state').textContent='daemon running · index '+s.index.state;
+for(const k of ['files','nodes','edges'])document.getElementById(k).textContent=s.index[k]??'–';
+document.getElementById('repos').textContent=(s.index.repos||[]).join(', ')||'–';
+document.getElementById('last').textContent=s.index.last_index?new Date(s.index.last_index).toLocaleString():'–';
+}catch(e){document.getElementById('state').textContent='daemon unreachable';}}
+tick();setInterval(tick,${(cfg.ui.sidebar_refresh_s || 10) * 1000});
+</script></main></body></html>`;
+}
+
+function uiThemeCss() {
+  return `/* vnodes UI theme — design-system insertion seam.
+   Intentionally unstyled per owner build directive 2: drop a design-dna
+   package's tokens/styles here (e.g. from a ~/Documents/<system>/DESIGN_SYSTEM.md). */
+body { font-family: monospace; margin: 2rem; }`;
+}
+
+module.exports = { serve, startDetached, stopDaemon, daemonState, doctor, httpCall };

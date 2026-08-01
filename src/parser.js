@@ -1,0 +1,178 @@
+'use strict';
+// Parse-only symbol extraction (BR-006: no target code is ever executed).
+// Heuristic line-based parsing per language family. Markdown gets a structural
+// heading scan producing Document/Section/Link nodes. Vue/Svelte/Astro yield one
+// component node per file with script blocks parsed as TS at real line numbers.
+// SQL contributes DDL constructs only.
+const path = require('node:path');
+
+const LANG_BY_EXT = {
+  '.js': 'javascript', '.jsx': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript',
+  '.ts': 'typescript', '.tsx': 'typescript', '.mts': 'typescript', '.cts': 'typescript',
+  '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust', '.java': 'java',
+  '.kt': 'kotlin', '.swift': 'swift', '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.cc': 'cpp',
+  '.hpp': 'cpp', '.cs': 'csharp', '.php': 'php', '.scala': 'scala', '.lua': 'lua',
+  '.sh': 'shell', '.bash': 'shell', '.zsh': 'shell', '.sql': 'sql', '.md': 'markdown',
+  '.mdx': 'markdown', '.vue': 'component', '.svelte': 'component', '.astro': 'component',
+  '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml', '.html': 'html',
+  '.css': 'css', '.scss': 'css', '.less': 'css', '.ex': 'elixir', '.exs': 'elixir',
+  '.erl': 'erlang', '.hs': 'haskell', '.ml': 'ocaml', '.zig': 'zig', '.dart': 'dart',
+  '.r': 'r', '.jl': 'julia', '.pl': 'perl', '.groovy': 'groovy', '.tf': 'terraform',
+};
+
+function langOf(relPath) {
+  const base = path.basename(relPath);
+  if (base.startsWith('.env')) return 'env'; // allowlisted examples index as env files
+  return LANG_BY_EXT[path.extname(relPath).toLowerCase()] || null;
+}
+
+// --- per-family symbol patterns: [kind, regex-with-name-group] ---
+const CODE_PATTERNS = {
+  javascript: [
+    ['function', /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/],
+    ['class', /^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/],
+    ['function', /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/],
+    ['const', /^\s*export\s+(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/],
+    ['method', /^\s{2,}(?:static\s+)?(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*\{\s*$/],
+  ],
+  typescript: null, // alias of javascript, plus interfaces/types
+  python: [
+    ['function', /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/],
+    ['class', /^\s*class\s+([A-Za-z_]\w*)/],
+  ],
+  ruby: [
+    ['function', /^\s*def\s+(self\.)?([A-Za-z_]\w*[?!]?)/],
+    ['class', /^\s*class\s+([A-Z]\w*)/],
+    ['module', /^\s*module\s+([A-Z]\w*)/],
+  ],
+  go: [
+    ['function', /^func\s+(?:\([^)]+\)\s+)?([A-Za-z_]\w*)/],
+    ['type', /^type\s+([A-Za-z_]\w*)/],
+  ],
+  rust: [
+    ['function', /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/],
+    ['struct', /^\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+([A-Za-z_]\w*)/],
+    ['enum', /^\s*(?:pub(?:\([^)]*\))?\s+)?enum\s+([A-Za-z_]\w*)/],
+    ['trait', /^\s*(?:pub(?:\([^)]*\))?\s+)?trait\s+([A-Za-z_]\w*)/],
+    ['impl', /^\s*impl(?:<[^>]*>)?\s+(?:[\w:]+\s+for\s+)?([A-Za-z_][\w:]*)/],
+  ],
+  java: [
+    ['class', /^\s*(?:public\s+|private\s+|protected\s+)?(?:abstract\s+|final\s+|static\s+)*(?:class|interface|enum|record)\s+([A-Za-z_]\w*)/],
+    ['method', /^\s+(?:public|private|protected)\s+(?:static\s+)?[\w<>\[\],\s]+\s+([A-Za-z_]\w*)\s*\(/],
+  ],
+  sql: [
+    ['table', /^\s*create\s+(?:or\s+replace\s+)?table\s+(?:if\s+not\s+exists\s+)?[`"']?([\w.]+)/i],
+    ['view', /^\s*create\s+(?:or\s+replace\s+)?(?:materialized\s+)?view\s+[`"']?([\w.]+)/i],
+    ['function', /^\s*create\s+(?:or\s+replace\s+)?function\s+[`"']?([\w.]+)/i],
+    ['index', /^\s*create\s+(?:unique\s+)?index\s+(?:if\s+not\s+exists\s+)?[`"']?([\w.]+)/i],
+    ['trigger', /^\s*create\s+(?:or\s+replace\s+)?trigger\s+[`"']?([\w.]+)/i],
+  ],
+  shell: [['function', /^\s*(?:function\s+)?([A-Za-z_]\w*)\s*\(\)\s*\{/]],
+  csharp: null, kotlin: null, swift: null, scala: null, // reuse java-ish
+  c: [
+    ['function', /^[A-Za-z_][\w\s*]*\s[*]?([A-Za-z_]\w*)\s*\([^;]*\)\s*\{?\s*$/],
+    ['struct', /^\s*(?:typedef\s+)?struct\s+([A-Za-z_]\w*)/],
+  ],
+  cpp: null, // reuse c
+  php: [
+    ['function', /^\s*(?:public\s+|private\s+|protected\s+|static\s+)*function\s+([A-Za-z_]\w*)/],
+    ['class', /^\s*(?:abstract\s+|final\s+)?class\s+([A-Za-z_]\w*)/],
+  ],
+};
+CODE_PATTERNS.typescript = [
+  ...CODE_PATTERNS.javascript,
+  ['interface', /^\s*(?:export\s+)?interface\s+([A-Za-z_$][\w$]*)/],
+  ['type', /^\s*(?:export\s+)?type\s+([A-Za-z_$][\w$]*)\s*=/],
+  ['enum', /^\s*(?:export\s+)?(?:const\s+)?enum\s+([A-Za-z_$][\w$]*)/],
+];
+CODE_PATTERNS.cpp = CODE_PATTERNS.c;
+CODE_PATTERNS.csharp = CODE_PATTERNS.java;
+CODE_PATTERNS.kotlin = [
+  ['function', /^\s*(?:override\s+|private\s+|public\s+|internal\s+|suspend\s+)*fun\s+([A-Za-z_]\w*)/],
+  ['class', /^\s*(?:data\s+|sealed\s+|open\s+|abstract\s+)*(?:class|interface|object)\s+([A-Za-z_]\w*)/],
+];
+CODE_PATTERNS.swift = [
+  ['function', /^\s*(?:public\s+|private\s+|internal\s+|static\s+|override\s+)*func\s+([A-Za-z_]\w*)/],
+  ['class', /^\s*(?:public\s+|final\s+)*(?:class|struct|enum|protocol|extension)\s+([A-Za-z_]\w*)/],
+];
+CODE_PATTERNS.scala = [
+  ['function', /^\s*(?:override\s+|private\s+|protected\s+)*def\s+([A-Za-z_]\w*)/],
+  ['class', /^\s*(?:case\s+|abstract\s+|sealed\s+)*(?:class|trait|object)\s+([A-Za-z_]\w*)/],
+];
+
+const IMPORT_PATTERNS = [
+  /^\s*import\s+.*?from\s+['"]([^'"]+)['"]/,          // ES modules
+  /^\s*import\s+['"]([^'"]+)['"]/,                    // side-effect import
+  /require\(\s*['"]([^'"]+)['"]\s*\)/,                // CJS
+  /^\s*from\s+([\w.]+)\s+import\s+/,                  // python
+  /^\s*import\s+([\w.]+)\s*$/,                        // python / java-ish
+  /^\s*use\s+([\w:]+)/,                               // rust
+  /^\s*#include\s+["<]([^">]+)[">]/,                  // c/c++
+  /^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/,     // ruby
+];
+
+function parseMarkdown(relPath, text) {
+  const nodes = [{ name: path.basename(relPath), kind: 'document', line: 1, signature: relPath }];
+  const lines = text.split('\n');
+  let inFence = false;
+  lines.forEach((l, i) => {
+    if (/^\s*```/.test(l)) { inFence = !inFence; return; }
+    if (inFence) return;
+    const h = l.match(/^(#{1,6})\s+(.*)/);
+    if (h) nodes.push({ name: h[2].trim(), kind: 'section', line: i + 1, signature: l.trim() });
+    for (const m of l.matchAll(/\[([^\]]+)\]\(([^)\s]+)\)/g))
+      nodes.push({ name: m[1], kind: 'link', line: i + 1, signature: m[2] });
+  });
+  return { nodes, imports: [] };
+}
+
+function parseComponent(relPath, text) {
+  // One component node per file; script blocks parsed as TS at real line numbers.
+  const nodes = [{ name: path.basename(relPath, path.extname(relPath)), kind: 'component', line: 1, signature: relPath }];
+  const imports = [];
+  const lines = text.split('\n');
+  let inScript = false;
+  lines.forEach((l, i) => {
+    if (/<script[\s>]/.test(l)) { inScript = true; return; }
+    if (/<\/script>/.test(l)) { inScript = false; return; }
+    const inFrontmatter = relPath.endsWith('.astro');
+    if (!inScript && !inFrontmatter) return;
+    for (const [kind, re] of CODE_PATTERNS.typescript) {
+      const m = l.match(re);
+      if (m) { nodes.push({ name: m[m.length - 1], kind, line: i + 1, signature: l.trim() }); break; }
+    }
+    for (const re of IMPORT_PATTERNS) {
+      const m = l.match(re);
+      if (m) { imports.push(m[1]); break; }
+    }
+  });
+  return { nodes, imports };
+}
+
+function parseFile(relPath, text) {
+  const lang = langOf(relPath);
+  if (!lang) return null;
+  if (lang === 'markdown') return { lang, ...parseMarkdown(relPath, text) };
+  if (lang === 'component') return { lang, ...parseComponent(relPath, text) };
+  const patterns = CODE_PATTERNS[lang];
+  const nodes = [];
+  const imports = [];
+  const lines = text.split('\n');
+  lines.forEach((l, i) => {
+    if (patterns) {
+      for (const [kind, re] of patterns) {
+        const m = l.match(re);
+        if (m) { nodes.push({ name: m[m.length - 1], kind, line: i + 1, signature: l.trim().slice(0, 200) }); break; }
+      }
+    }
+    for (const re of IMPORT_PATTERNS) {
+      const m = l.match(re);
+      if (m) { imports.push(m[1]); break; }
+    }
+  });
+  // Every parsed file is at least a file node so the graph covers the tree.
+  if (nodes.length === 0) nodes.push({ name: path.basename(relPath), kind: 'file', line: 1, signature: relPath });
+  return { lang, nodes, imports };
+}
+
+module.exports = { parseFile, langOf, LANG_BY_EXT };
