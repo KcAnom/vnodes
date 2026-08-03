@@ -41,6 +41,16 @@ Zero dependencies — Node 22+ only (`node:sqlite` for the graph store).
   daemon/index logs, read-only `vnodes doctor` that works with the daemon down.
 - **Status UI (M9)** — `vnodes ui` on the daemon port; `/ui/theme.css` is the
   design-system insertion seam (deliberately unstyled).
+- **Dependency map (M9)** — `vnodes map [target]` at `/ui/map`: live SVG graph
+  of the indexed files, laid out left-to-right in dependency order. Import
+  cycles render red, isolated files dashed, click a node for its skeleton and
+  both edge directions. A `--task` scopes it to a real context capsule — pivots
+  lit, skeletons amber, everything else dimmed, so you see what an agent would
+  actually be handed. Frames push over SSE when the index changes. Trimming to
+  `ui.map_max_nodes` is always stated on the page, never silent. The canvas
+  fits itself to the viewport on load and after that it is yours — drag to pan,
+  ⌘/ctrl+wheel or `+`/`-`/`0` to zoom, `compact` for smaller boxes on dense
+  graphs — and a live update never moves what you are looking at.
 
 ## Quick start
 

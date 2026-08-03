@@ -39,7 +39,20 @@ function serve(projectRoot) {
     }
     if (req.method === 'GET' && req.url === '/tools') return send(200, { tools: TOOL_DEFS });
     if (req.method === 'GET' && req.url.startsWith('/ui')) {
-      if (req.url === '/ui/theme.css') return send(200, uiThemeCss(), 'text/css');
+      const url = new URL(req.url, `http://127.0.0.1:${port}`);
+      const q = Object.fromEntries(url.searchParams);
+      if (url.pathname === '/ui/theme.css') return send(200, uiThemeCss(), 'text/css');
+      if (url.pathname === '/ui/map') {
+        const { mapView } = require('./view');
+        const { renderPage } = require('./view/page');
+        return send(200, renderPage(mapView(projectRoot, engineDir(projectRoot), cfg, q), q), 'text/html');
+      }
+      if (url.pathname === '/ui/map/events') return mapEvents(req, res, projectRoot, cfg, q);
+      if (url.pathname === '/ui/map/node') {
+        const { fileDetail } = require('./view/data');
+        const detail = fileDetail(engineDir(projectRoot), q.file || '');
+        return detail ? send(200, detail) : send(404, { error: 'not indexed', file: q.file || '' });
+      }
       return send(200, uiHtml(cfg), 'text/html');
     }
     if (req.method === 'POST' && req.url === '/rpc') {
@@ -57,7 +70,7 @@ function serve(projectRoot) {
       });
       return;
     }
-    send(404, { error: 'not found', endpoints: ['/status', '/tools', '/rpc', '/ui'] });
+    send(404, { error: 'not found', endpoints: ['/status', '/tools', '/rpc', '/ui', '/ui/map'] });
   });
   server.on('error', e => {
     if (e.code === 'EADDRINUSE') {
@@ -159,6 +172,41 @@ async function doctor(projectRoot) {
   return { project: projectRoot, checks, healthy: checks.every(c => c.ok) };
 }
 
+/**
+ * Live map frames.
+ *
+ * Pushed on index generation change, not on a timer: re-rendering an unchanged
+ * graph every few seconds would burn CPU on a background tab and, with a
+ * capsule task in the query, re-run the whole context pipeline to produce a
+ * byte-identical frame. The keepalive comment holds the connection open through
+ * proxies without carrying a payload.
+ */
+function mapEvents(req, res, projectRoot, cfg, query) {
+  const { mapView } = require('./view');
+  const { sseFrame } = require('./view/page');
+  const { indexStamp } = require('./view/data');
+  const engDir = engineDir(projectRoot);
+  const everyMs = ((cfg.ui && cfg.ui.map_refresh_s) || 3) * 1000;
+
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+
+  let stamp = indexStamp(engDir);
+  const timer = setInterval(() => {
+    let next;
+    try { next = indexStamp(engDir); } catch { return; }
+    if (next === stamp) { res.write(': keepalive\n\n'); return; }
+    stamp = next;
+    try { res.write(sseFrame(mapView(projectRoot, engDir, cfg, query), query)); }
+    catch (e) { log(projectRoot, 'daemon', `map frame failed: ${e.message}`); }
+  }, everyMs);
+  timer.unref?.();
+  req.on('close', () => clearInterval(timer));
+}
+
 function uiHtml(cfg) {
   // M9 minimal surface. Styling deliberately absent: /ui/theme.css is the
   // design-system insertion seam (owner build directive 2).
@@ -169,6 +217,7 @@ function uiHtml(cfg) {
 <dl><dt>Files</dt><dd id="files">–</dd><dt>Nodes</dt><dd id="nodes">–</dd>
 <dt>Edges</dt><dd id="edges">–</dd><dt>Repos</dt><dd id="repos">–</dd>
 <dt>Last index</dt><dd id="last">–</dd></dl>
+<p><a href="/ui/map">dependency map →</a></p>
 <script>
 async function tick(){try{const r=await fetch('/status');const s=await r.json();
 document.getElementById('state').textContent='daemon running · index '+s.index.state;
