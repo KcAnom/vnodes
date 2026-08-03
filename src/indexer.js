@@ -30,15 +30,88 @@ function walk(root, isIgnored, out = [], rel = '') {
   return out;
 }
 
-// Resolve an import specifier to a file in the indexed set (relative paths only;
-// bare package specifiers stay unresolved — external deps are not graph nodes).
-function resolveImport(fromFile, spec, fileSet) {
-  if (!spec.startsWith('.')) return null;
-  const base = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec));
-  const candidates = [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.jsx`,
-    `${base}.mjs`, `${base}.py`, `${base}.rb`, `${base}/index.ts`, `${base}/index.js`,
-    `${base}/__init__.py`, `${base}.vue`, `${base}.svelte`];
-  for (const c of candidates) if (fileSet.has(c)) return c;
+const CAND_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rb',
+  '.vue', '.svelte', '/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/__init__.py'];
+
+function tryCandidates(base, fileSet) {
+  for (const s of CAND_SUFFIXES) if (fileSet.has(base + s)) return base + s;
+  return null;
+}
+
+// Path aliases from tsconfig/jsconfig (compilerOptions.baseUrl + paths), e.g.
+// "@/*": ["./*"]. Without these, alias imports look like bare package
+// specifiers and every intra-project edge through them is lost.
+function loadAliases(repoRoot) {
+  const out = [];
+  for (const name of ['tsconfig.json', 'jsconfig.json']) {
+    const p = path.join(repoRoot, name);
+    if (!fs.existsSync(p)) continue;
+    let raw;
+    try { raw = fs.readFileSync(p, 'utf8'); } catch { continue; }
+    let j = null;
+    try { j = JSON.parse(raw); } catch {
+      // tsconfig permits comments and trailing commas; JSON.parse does not.
+      try {
+        j = JSON.parse(raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+          .replace(/,(\s*[}\]])/g, '$1'));
+      } catch { continue; }
+    }
+    const co = (j && j.compilerOptions) || {};
+    const baseUrl = co.baseUrl || '.';
+    for (const [pat, targets] of Object.entries(co.paths || {})) {
+      if (!Array.isArray(targets)) continue;
+      for (const t of targets) {
+        let target = path.posix.normalize(path.posix.join(baseUrl, String(t).replace(/\*$/, '')));
+        if (target === '.' || target === './') target = '';
+        out.push({ prefix: pat.replace(/\*$/, ''), wildcard: pat.endsWith('*'), target });
+      }
+    }
+  }
+  return out;
+}
+
+// Python dots are package separators, not filesystem path segments. A leading
+// dot means "this package", each extra dot one level up — so `.util` is never
+// the dotfile `./.util`. Bare dotted names are absolute package paths, and the
+// package root is often nested (tools/LatentSync/latentsync/...), so try each
+// ancestor directory as a root.
+function resolvePythonImport(fromFile, spec, fileSet) {
+  const m = spec.match(/^(\.*)([\s\S]*)$/);
+  const dots = m[1].length;
+  const rest = m[2].split('.').filter(Boolean).join('/');
+  const fromDir = path.posix.dirname(fromFile);
+  if (dots > 0) {
+    let dir = fromDir;
+    for (let i = 1; i < dots; i++) dir = path.posix.dirname(dir);
+    return tryCandidates(rest ? path.posix.join(dir, rest) : dir, fileSet);
+  }
+  if (!rest) return null;
+  let dir = fromDir;
+  for (;;) {
+    const hit = tryCandidates(dir === '.' ? rest : path.posix.join(dir, rest), fileSet);
+    if (hit) return hit;
+    if (dir === '.' || dir === '') return null;
+    dir = path.posix.dirname(dir);
+  }
+}
+
+// Resolve an import specifier to a file in the indexed set. Bare package
+// specifiers stay unresolved — external deps are not graph nodes.
+function resolveImport(fromFile, spec, fileSet, aliases = []) {
+  if (fromFile.endsWith('.py')) return resolvePythonImport(fromFile, spec, fileSet);
+  if (spec.startsWith('.')) {
+    return tryCandidates(
+      path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), fileSet);
+  }
+  for (const a of aliases) {
+    if (a.wildcard ? spec.startsWith(a.prefix) : spec === a.prefix) {
+      const tail = a.wildcard ? spec.slice(a.prefix.length) : '';
+      let base = path.posix.normalize(a.target ? path.posix.join(a.target, tail) : tail);
+      if (base.startsWith('./')) base = base.slice(2);
+      const hit = tryCandidates(base, fileSet);
+      if (hit) return hit;
+    }
+  }
   return null;
 }
 
@@ -49,6 +122,7 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
   const maxBytes = cfg.index.max_file_size_kb * 1024;
   const files = walk(repoRoot, isIgnored);
   const fileSet = new Set(files);
+  const aliases = loadAliases(repoRoot);
 
   const prev = new Map(
     db.prepare('SELECT path, hash FROM files WHERE repo = ?').all(alias).map(r => [r.path, r.hash]));
@@ -97,8 +171,10 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
   const keyedSet = new Set(files.map(f => prefix + f));
   for (const [key, rel, imports] of pendingImports) {
     for (const spec of imports) {
-      const dstRel = resolveImport(rel, spec, fileSet);
-      if (dstRel) insEdge.run(key, prefix + dstRel, 'import');
+      const dstRel = resolveImport(rel, spec, fileSet, aliases);
+      // Ancestor-root probing can land back on the importing file itself
+      // (e.g. `import util` inside util.py); a self-edge is not a dependency.
+      if (dstRel && dstRel !== rel) insEdge.run(key, prefix + dstRel, 'import');
     }
   }
   log?.(`repo=${alias || '(root)'} files=${files.length} +${added} ~${updated} =${unchanged} secret-skip=${skippedSecret} size-skip=${skippedSize}`);

@@ -105,7 +105,7 @@ const IMPORT_PATTERNS = [
   /^\s*import\s+['"]([^'"]+)['"]/,                    // side-effect import
   /require\(\s*['"]([^'"]+)['"]\s*\)/,                // CJS
   /^\s*from\s+([\w.]+)\s+import\s+/,                  // python
-  /^\s*import\s+([\w.]+)\s*$/,                        // python / java-ish
+  /^\s*import\s+([\w.]+)(?:\s+as\s+\w+)?\s*(?:[#;].*)?$/, // python / java-ish, incl. `as` alias
   /^\s*use\s+([\w:]+)/,                               // rust
   /^\s*#include\s+["<]([^">]+)[">]/,                  // c/c++
   /^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/,     // ruby

@@ -167,11 +167,17 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       else out({ ...rt.llmState(projectRoot), runtime: rt.runtimeInfo(projectRoot) });
       break;
     }
-    case 'ui': {
+    case 'ui':
+    case 'map': {
       const { daemonState, startDetached } = require('../src/daemon');
       const cfg = loadConfig(projectRoot);
       if (!daemonState(projectRoot).running) { startDetached(projectRoot); await new Promise(r => setTimeout(r, 700)); }
-      const url = `http://127.0.0.1:${cfg.mcp.port}/ui`;
+      // `vnodes map <target>` scopes the map the same way `vnodes impact` does.
+      const qs = [];
+      if (cmd === 'map' && args[0]) qs.push(`target=${encodeURIComponent(args.join(' '))}`);
+      if (cmd === 'map' && flags.depth) qs.push(`depth=${encodeURIComponent(flags.depth)}`);
+      if (cmd === 'map' && flags.task) qs.push(`task=${encodeURIComponent(flags.task)}`);
+      const url = `http://127.0.0.1:${cfg.mcp.port}/ui${cmd === 'map' ? '/map' : ''}${qs.length ? `?${qs.join('&')}` : ''}`;
       out(url);
       try { require('node:child_process').execFileSync('open', [url]); } catch {}
       break;
@@ -199,6 +205,8 @@ usage: vnodes <command> [args] [--flags]
   logs [daemon|index] [--follow]
   llm [status|enable|disable|runtime|ask <q>] [--runtime claude-code|pi] [--pi-model grok-4.5-latest|gpt-5.6-sol]
   ui                          open the status page (design-system seam)
+  map [target] [--depth N] [--task "..."]
+                              open the live dependency map (scoped to target if given)
 
 project: resolved upward from cwd (--project <path> to override)`);
   }

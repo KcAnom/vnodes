@@ -26,7 +26,9 @@
     "level": "warn"
   },
   "ui": {
-    "sidebar_refresh_s": 10
+    "sidebar_refresh_s": 10,
+    "map_max_nodes": 150,
+    "map_refresh_s": 3
   },
   "filter_secrets": true,
   "personal_mode": false,
