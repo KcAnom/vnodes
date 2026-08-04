@@ -237,6 +237,12 @@ function parseFile(relPath, text) {
       const m = l.match(/^\s*(?:global\s+)?using\s+(?:static\s+)?(?:\w+\s*=\s*)?([\w.]+)\s*;/);
       if (m) { imports.push(m[1]); return; }
     }
+    // Shell: `source lib.sh` / `. ./lib.sh` — path-style, resolved like a
+    // relative import. Quotes optional; $VAR paths are dynamic and skipped.
+    if (lang === 'shell') {
+      const m = l.match(/^\s*(?:source|\.)\s+['"]?([^'"\s$]+)['"]?\s*$/);
+      if (m) { imports.push(m[1]); return; }
+    }
     // Swift: @testable and item imports (`import struct Foo.Bar`) escape the
     // generic pattern; capture the module reference whole.
     if (lang === 'swift') {

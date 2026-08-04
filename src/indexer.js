@@ -344,6 +344,15 @@ function resolveImport(fromFile, spec, fileSet, ctx = {}) {
   if (fromFile.endsWith('.java') || fromFile.endsWith('.kt')) return ctx.jvm ? resolveJvmImport(spec, ctx.jvm) : null;
   if (fromFile.endsWith('.cs')) return resolveCsImport(spec, ctx.csNamespaces || new Map(), ctx.csTypes || new Map());
   if (fromFile.endsWith('.lua')) return resolveLuaImport(fromFile, spec, fileSet, ctx.luaFiles || new Map());
+  if (fromFile.endsWith('.sh') || fromFile.endsWith('.bash') || fromFile.endsWith('.zsh')) {
+    // source paths resolve relative to the script's directory, then repo root;
+    // ~/ and absolute paths are outside the tree and stay unresolved.
+    if (spec.startsWith('~') || spec.startsWith('/')) return null;
+    const sib = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec));
+    if (fileSet.has(sib)) return sib;
+    const norm = path.posix.normalize(spec);
+    return fileSet.has(norm) ? norm : null;
+  }
   if (spec.startsWith('.')) {
     return tryCandidates(
       path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), fileSet);

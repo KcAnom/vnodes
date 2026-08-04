@@ -130,6 +130,18 @@ test('lua: dotted path, root-relative, and unique-basename requires', () => {
   assert.ok(!edges.some(e => e.includes('socket')), 'external require must not edge');
 });
 
+test('shell: source resolves script-relative and root-relative, externals do not', () => {
+  const root = fixture({
+    'bin/run.sh': 'source ../lib/common.sh\nsource scripts/env.sh\nsource ~/.zshrc\n',
+    'lib/common.sh': 'common() { :; }\n',
+    'scripts/env.sh': 'setup() { :; }\n',
+  });
+  const edges = edgesOf(root);
+  assert.ok(edges.includes('bin/run.sh -> lib/common.sh'));
+  assert.ok(edges.includes('bin/run.sh -> scripts/env.sh'));
+  assert.strictEqual(edges.length, 2, 'externals must not edge');
+});
+
 test('secrets and oversized files are skipped', () => {
   const root = fixture({
     '.env': 'SECRET=1\n',

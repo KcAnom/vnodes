@@ -105,6 +105,15 @@ test('lua: both function forms and requires', () => {
   assert.deepStrictEqual(names, ['call', 'M.chat', 'handler']);
 });
 
+test('shell: source and dot-source captured, dynamic and env paths skipped', () => {
+  const r = parseFile('run.sh', [
+    'source lib/common.sh', '. ./helpers.sh', 'source "$HOME/conf.sh"',
+    'source ~/.zshrc', 'deploy() {', '}',
+  ].join('\n'));
+  assert.deepStrictEqual(r.imports, ['lib/common.sh', './helpers.sh', '~/.zshrc']);
+  assert.ok(r.nodes.some(n => n.kind === 'function' && n.name === 'deploy'));
+});
+
 test('markdown: headings and links, fenced code ignored', () => {
   const r = parseFile('README.md', '# Title\n```\n# not a heading\n```\n## Real\n[doc](./doc.md)\n');
   const kinds = r.nodes.map(n => `${n.kind}:${n.name}`);
