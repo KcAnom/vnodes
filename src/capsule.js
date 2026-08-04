@@ -39,7 +39,7 @@ function llmIntent(task, projectRoot) {
   return PRESETS.includes(word) && word !== 'auto' ? word : null;
 }
 
-function isTestFile(p) { return /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(p); }
+function isTestFile(p) { return /(^|\/)(tests?|__tests__|spec)\/|(^|\/)tests?\.[a-z]+$|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(p); }
 
 function terms(text) {
   return [...new Set((text || '').toLowerCase().match(/[a-z_][a-z0-9_]{2,}/g) || [])]
@@ -93,7 +93,16 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   const budget = max_tokens || cfg.capsule.max_tokens;
   const intent = resolveIntent(task, preset, projectRoot);
   const ranked = rankFiles(db, task, intent, repos);
-  const pivotFiles = ranked.filter(r => r.score > 0).slice(0, pivotCount);
+  // Pivots carry full file content, so a giant test file with thousands of
+  // symbol hits can out-score the real implementation on raw term volume.
+  // Outside debug intent, tests only pivot when nothing else scores — they
+  // remain eligible as skeleton supporters either way.
+  let candidates = ranked.filter(r => r.score > 0);
+  if (intent !== 'debug') {
+    const nonTest = candidates.filter(r => !r.test);
+    if (nonTest.length) candidates = nonTest;
+  }
+  const pivotFiles = candidates.slice(0, pivotCount);
   const pivotKeys = pivotFiles.map(p => p.path);
   const hood = neighbors(db, pivotKeys);
   const supporters = ranked
