@@ -81,6 +81,107 @@ test('kotlin: alias import and wildcard', () => {
   assert.deepStrictEqual(r.imports, ['com.app.Db', 'com.app.models.']);
 });
 
+test('dart: declarations, members, getters, factories', () => {
+  const r = parseFile('lib/src/badge.dart', [
+    "import 'package:flutter/widgets.dart';",
+    "import 'package:phluts_framework/phluts_framework.dart' as fw;",
+    'typedef Builder = Widget Function();',
+    'const kDefaultSize = 8.0;',
+    'abstract class PhlutsParser<T> {',
+    '  const PhlutsParser();',
+    '  String get type;',
+    '  T getModel(Map<String, dynamic> json);',
+    '  Widget parse(BuildContext context, T model);',
+    '}',
+    'mixin Loggable on Object {}',
+    'extension ColorX on Color {}',
+    'extension on int {}',
+    'enum Mode { light, dark }',
+    'class BadgeParser extends PhlutsParser<Badge> {',
+    "  @override",
+    "  String get type => 'customBadge';",
+    '  factory BadgeParser.fromJson(Map<String, dynamic> j) => BadgeParser();',
+    '  static Widget? build(BuildContext context) {',
+    '    return Container();',
+    '  }',
+    '}',
+  ].join('\n'));
+  assert.deepStrictEqual(r.imports,
+    ['package:flutter/widgets.dart', 'package:phluts_framework/phluts_framework.dart']);
+  const named = k => r.nodes.filter(n => n.kind === k).map(n => n.name);
+  assert.deepStrictEqual(named('class'), ['PhlutsParser', 'BadgeParser']);
+  assert.deepStrictEqual(named('mixin'), ['Loggable']);
+  assert.deepStrictEqual(named('extension'), ['ColorX']); // anonymous one skipped
+  assert.deepStrictEqual(named('enum'), ['Mode']);
+  assert.deepStrictEqual(named('type'), ['Builder']);
+  assert.deepStrictEqual(named('const'), ['kDefaultSize']);
+  assert.deepStrictEqual(named('getter'), ['type', 'type']);
+  assert.deepStrictEqual(named('constructor'), ['PhlutsParser', 'BadgeParser.fromJson']);
+  assert.deepStrictEqual(named('function'), ['getModel', 'parse', 'build']);
+});
+
+test('dart: flutter widget-tree calls are not mistaken for declarations', () => {
+  const r = parseFile('lib/screen.dart', [
+    'class Screen extends StatelessWidget {',
+    '  @override',
+    '  Widget build(BuildContext context) {',
+    '    final label = compute();',
+    '    return Column(',
+    '      children: [',
+    '        Container(',
+    "          child: Text('hi'),",
+    '        ),',
+    '        const SizedBox(height: 8),',
+    '      ],',
+    '    );',
+    '  }',
+    '}',
+  ].join('\n'));
+  const names = r.nodes.map(n => n.name);
+  assert.deepStrictEqual(names, ['Screen', 'build']);
+  for (const junk of ['Column', 'Container', 'Text', 'SizedBox', 'label', 'compute'])
+    assert.ok(!names.includes(junk), `${junk} leaked into the index`);
+});
+
+// Both cases below were real false positives found by indexing a Flutter repo.
+test('dart: ternary branches and Function types are not declarations', () => {
+  const r = parseFile('lib/avatar.dart', [
+    'class AvatarParser {',
+    '  Widget parse(BuildContext context, Avatar model) {',
+    '    final image = model.background != null',
+    '        ? NetworkImage(model.background!)',
+    '        : null;',
+    '  }',
+    '}',
+    'typedef ErrorBuilder = Widget Function(',
+    '  BuildContext context, dynamic error);',
+  ].join('\n'));
+  const names = r.nodes.map(n => n.name);
+  assert.deepStrictEqual(names, ['AvatarParser', 'parse', 'ErrorBuilder']);
+  assert.ok(!names.includes('NetworkImage'), 'ternary branch read as a declaration');
+  assert.ok(!names.includes('Function'), 'Function type read as a declaration');
+});
+
+test('dart: constructor calls in top-level literals are not declarations', () => {
+  const r = parseFile('lib/entries.dart', [
+    'const entries = [',
+    '  PlaygroundEntry(title: "a"),',
+    '  const PlaygroundEntry(title: "b"),',
+    '];',
+    'class HomeCubit {',
+    '  HomeCubit();',
+    '  const HomeCubit.seeded(this.value);',
+    '  void load() {',
+    '    emit(const PlaygroundEntry(title: "c"));',
+    '  }',
+    '}',
+  ].join('\n'));
+  const ctors = r.nodes.filter(n => n.kind === 'constructor').map(n => n.name);
+  assert.deepStrictEqual(ctors, ['HomeCubit', 'HomeCubit.seeded']);
+  assert.ok(!r.nodes.some(n => n.name === 'PlaygroundEntry'),
+    'constructor call captured as a declaration');
+});
+
 test('csharp: using forms captured, using-statements not, namespace as node', () => {
   const r = parseFile('src/A.cs', [
     'global using App.Shared;', 'using App.Services;', 'using static App.Core.Util;',
