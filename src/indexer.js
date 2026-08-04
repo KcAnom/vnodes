@@ -199,17 +199,20 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
     delEdges.run(key);
     pendingImports.push([key, rel, parsed.imports]);
   }
-  // Removed files: anything previously indexed but no longer on disk.
+  // Removed files: anything previously indexed but no longer on disk. Inbound
+  // edges must go too, or impact/flow keep pointing at ghost files.
   const delFile = db.prepare('DELETE FROM files WHERE path = ?');
+  const delInEdges = db.prepare('DELETE FROM edges WHERE dst_file = ?');
+  let removed = 0;
   for (const [gone] of prev) {
     delFile.run(gone);
     delNodes.run(gone, alias);
     delEdges.run(gone);
-    added; // (removed count not separately reported)
+    delInEdges.run(gone);
+    removed++;
   }
   // Second pass: edges, once the full file set is known.
   const prefix = alias ? `${alias}/` : '';
-  const keyedSet = new Set(files.map(f => prefix + f));
   for (const [key, rel, imports] of pendingImports) {
     for (const spec of imports) {
       const dstRel = resolveImport(rel, spec, fileSet, aliases);
@@ -218,8 +221,8 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
       if (dstRel && dstRel !== rel) insEdge.run(key, prefix + dstRel, 'import');
     }
   }
-  log?.(`repo=${alias || '(root)'} files=${files.length} +${added} ~${updated} =${unchanged} secret-skip=${skippedSecret} size-skip=${skippedSize}`);
-  return { manifest, added, updated, unchanged, skippedSecret, skippedSize, total: files.length };
+  log?.(`repo=${alias || '(root)'} files=${files.length} +${added} ~${updated} -${removed} =${unchanged} secret-skip=${skippedSecret} size-skip=${skippedSize}`);
+  return { manifest, added, updated, removed, unchanged, skippedSecret, skippedSize, total: files.length };
 }
 
 function runIndex(projectRoot, cfg, log) {

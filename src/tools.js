@@ -85,7 +85,9 @@ function callTool(projectRoot, name, args = {}, session = 'default') {
       result = ensureIndexed(projectRoot, cfg);
       break;
     case 'workspace_setup': {
-      const def = { name: args.name || args.workspace_id, repos: args.repos };
+      // Schema only requires repos; an unnamed workspace renders as null in
+      // /status and doctor, so fall back to the project directory name.
+      const def = { name: args.name || args.workspace_id || path.basename(projectRoot), repos: args.repos };
       result = setupWorkspace(projectRoot, def);
       break;
     }
