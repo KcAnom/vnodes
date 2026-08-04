@@ -70,6 +70,42 @@ function loadAliases(repoRoot) {
   return out;
 }
 
+// Python stdlib top-level module names (3.12 sys.stdlib_module_names, public
+// set). Bare imports of these resolve to the stdlib in a real interpreter, so
+// ancestor-root probing must not claim them for a local file of the same name.
+const PY_STDLIB = new Set([
+  '__future__', '_thread', 'abc', 'aifc', 'argparse', 'array', 'ast', 'asyncio',
+  'atexit', 'audioop', 'base64', 'bdb', 'binascii', 'bisect', 'builtins', 'bz2',
+  'calendar', 'cgi', 'cgitb', 'chunk', 'cmath', 'cmd', 'code', 'codecs',
+  'codeop', 'collections', 'colorsys', 'compileall', 'concurrent',
+  'configparser', 'contextlib', 'contextvars', 'copy', 'copyreg', 'cProfile',
+  'crypt', 'csv', 'ctypes', 'curses', 'dataclasses', 'datetime', 'dbm',
+  'decimal', 'difflib', 'dis', 'doctest', 'email', 'encodings', 'ensurepip',
+  'enum', 'errno', 'faulthandler', 'fcntl', 'filecmp', 'fileinput', 'fnmatch',
+  'fractions', 'ftplib', 'functools', 'gc', 'getopt', 'getpass', 'gettext',
+  'glob', 'graphlib', 'grp', 'gzip', 'hashlib', 'heapq', 'hmac', 'html',
+  'http', 'idlelib', 'imaplib', 'imghdr', 'importlib', 'inspect', 'io',
+  'ipaddress', 'itertools', 'json', 'keyword', 'lib2to3', 'linecache',
+  'locale', 'logging', 'lzma', 'mailbox', 'mailcap', 'marshal', 'math',
+  'mimetypes', 'mmap', 'modulefinder', 'msilib', 'msvcrt', 'multiprocessing',
+  'netrc', 'nis', 'nntplib', 'ntpath', 'nturl2path', 'numbers', 'opcode',
+  'operator', 'optparse', 'os', 'ossaudiodev', 'pathlib', 'pdb', 'pickle',
+  'pickletools', 'pipes', 'pkgutil', 'platform', 'plistlib', 'poplib',
+  'posix', 'posixpath', 'pprint', 'profile', 'pstats', 'pty', 'pwd',
+  'py_compile', 'pyclbr', 'pydoc', 'queue', 'quopri', 'random', 're',
+  'readline', 'reprlib', 'resource', 'rlcompleter', 'runpy', 'sched',
+  'secrets', 'select', 'selectors', 'shelve', 'shlex', 'shutil', 'signal',
+  'site', 'smtplib', 'sndhdr', 'socket', 'socketserver', 'spwd', 'sqlite3',
+  'ssl', 'stat', 'statistics', 'string', 'stringprep', 'struct', 'subprocess',
+  'sunau', 'symtable', 'sys', 'sysconfig', 'syslog', 'tabnanny', 'tarfile',
+  'telnetlib', 'tempfile', 'termios', 'test', 'textwrap', 'threading', 'time',
+  'timeit', 'tkinter', 'token', 'tokenize', 'tomllib', 'trace', 'traceback',
+  'tracemalloc', 'tty', 'turtle', 'turtledemo', 'types', 'typing',
+  'unicodedata', 'unittest', 'urllib', 'uu', 'uuid', 'venv', 'warnings',
+  'wave', 'weakref', 'webbrowser', 'winreg', 'winsound', 'wsgiref', 'xdrlib',
+  'xml', 'xmlrpc', 'zipapp', 'zipfile', 'zipimport', 'zlib', 'zoneinfo',
+]);
+
 // Python dots are package separators, not filesystem path segments. A leading
 // dot means "this package", each extra dot one level up — so `.util` is never
 // the dotfile `./.util`. Bare dotted names are absolute package paths, and the
@@ -86,6 +122,11 @@ function resolvePythonImport(fromFile, spec, fileSet) {
     return tryCandidates(rest ? path.posix.join(dir, rest) : dir, fileSet);
   }
   if (!rest) return null;
+  // A stdlib name resolves to the stdlib unless a same-directory sibling
+  // shadows it (script dir leads sys.path); never claim it via ancestor roots.
+  if (PY_STDLIB.has(rest.split('/')[0])) {
+    return tryCandidates(fromDir === '.' ? rest : path.posix.join(fromDir, rest), fileSet);
+  }
   let dir = fromDir;
   for (;;) {
     const hit = tryCandidates(dir === '.' ? rest : path.posix.join(dir, rest), fileSet);
