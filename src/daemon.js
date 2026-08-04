@@ -24,6 +24,53 @@ function daemonState(projectRoot) {
   catch { return { running: false, stale_pidfile: true, pid, port }; }
 }
 
+// Watch the project tree and re-index on source changes, debounced, so the
+// SSE map stream (keyed off indexStamp) goes live without a manual
+// `vnodes index`. Events are filtered through the same ignore rules and
+// language check as the indexer — .vnodes/ is default-excluded, so the
+// index writes themselves never re-trigger the watcher.
+function startWatcher(projectRoot, cfg) {
+  const { buildIgnore } = require('./ignore');
+  const { langOf } = require('./parser');
+  const { runIndex } = require('./indexer');
+  const ws = loadWorkspace(projectRoot);
+  const roots = ws ? ws.repos.map(r => path.resolve(ws.baseDir, r.path)).filter(p => fs.existsSync(p)) : [projectRoot];
+  const watchers = [];
+  let timer = null, indexing = false, dirty = false;
+  const run = () => {
+    if (indexing) { dirty = true; return; }
+    indexing = true;
+    try {
+      const r = runIndex(projectRoot, cfg);
+      log(projectRoot, 'daemon', `watcher re-index: ${r.files} files / ${r.edges} edges in ${r.ms}ms`);
+    } catch (e) {
+      log(projectRoot, 'daemon', `watcher re-index failed: ${e.message}`);
+    }
+    indexing = false;
+    if (dirty) { dirty = false; kick(); }
+  };
+  const kick = () => {
+    clearTimeout(timer);
+    timer = setTimeout(run, cfg.index.watch_debounce_ms);
+    timer.unref?.();
+  };
+  for (const root of roots) {
+    const isIgnored = buildIgnore(root);
+    try {
+      const w = fs.watch(root, { recursive: true }, (_ev, fname) => {
+        if (!fname) return;
+        const rel = String(fname).split(path.sep).join('/');
+        if (isIgnored(rel) || !langOf(rel)) return;
+        kick();
+      });
+      watchers.push(w);
+    } catch (e) {
+      log(projectRoot, 'daemon', `watcher unavailable for ${root}: ${e.message}`);
+    }
+  }
+  return () => { clearTimeout(timer); for (const w of watchers) w.close(); };
+}
+
 function serve(projectRoot) {
   const cfg = loadConfig(projectRoot);
   const port = cfg.mcp.port;
@@ -81,13 +128,16 @@ function serve(projectRoot) {
     }
     throw e;
   });
+  let stopWatcher = null;
   server.listen(port, '127.0.0.1', () => {
     fs.writeFileSync(pidFile(projectRoot), JSON.stringify({ pid: process.pid, port }));
-    log(projectRoot, 'daemon', `daemon started pid=${process.pid} port=${port}`);
+    if (cfg.index.watch !== false) stopWatcher = startWatcher(projectRoot, cfg);
+    log(projectRoot, 'daemon', `daemon started pid=${process.pid} port=${port} watch=${cfg.index.watch !== false}`);
     console.log(`vnodes daemon running on http://127.0.0.1:${port} (status: /status, ui: /ui)`);
   });
   const shutdown = () => {
     log(projectRoot, 'daemon', 'daemon stopped');
+    stopWatcher?.();
     try { fs.unlinkSync(pidFile(projectRoot)); } catch {}
     process.exit(0);
   };
@@ -169,6 +219,16 @@ async function doctor(projectRoot) {
   add('transport', ds.running ? !portFree : portFree,
     ds.running ? (portFree ? 'pidfile says running but port is free — kill stale daemon' : `port ${cfg.mcp.port} held by daemon`)
       : (portFree ? `port ${cfg.mcp.port} free for HTTP transport (stdio is default)` : `port ${cfg.mcp.port} taken by another process — set VNODES_PORT`));
+
+  // LLM layer: state machine says enabled, but does the runtime CLI exist?
+  const { llmState, runtimeInfo, runtimeCliFound } = require('./runtime');
+  const llm = llmState(projectRoot);
+  if (llm.state === 'running') {
+    const rt = runtimeInfo(projectRoot);
+    const found = runtimeCliFound(projectRoot);
+    add('llm-runtime', found,
+      found ? `runtime '${rt.provider}' (${rt.cli}) on PATH` : `llm enabled but runtime CLI '${rt.cli}' not on PATH — intent falls back to rule-based`);
+  }
 
   // Agent config presence.
   const mcpJson = path.join(projectRoot, '.mcp.json');

@@ -168,7 +168,13 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       else if (sub === 'disable') out(rt.llmDisable(projectRoot));
       else if (sub === 'runtime') out(rt.runtimeInfo(projectRoot, { runtime: flags.runtime, pi_model: flags['pi-model'] }));
       else if (sub === 'ask') out(rt.runtimeAsk(projectRoot, args.join(' '), { runtime: flags.runtime, pi_model: flags['pi-model'] }));
-      else out({ ...rt.llmState(projectRoot), runtime: rt.runtimeInfo(projectRoot) });
+      else {
+        // Truthful status: the state machine records intent; mode + cli check
+        // say what actually answers — the configured runtime CLI, not a
+        // downloaded local model.
+        out({ ...rt.llmState(projectRoot), mode: 'runtime-cli',
+          runtime: rt.runtimeInfo(projectRoot), runtime_cli_found: rt.runtimeCliFound(projectRoot) });
+      }
       break;
     }
     case 'ui':

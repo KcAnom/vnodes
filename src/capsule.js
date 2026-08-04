@@ -14,14 +14,29 @@ const PRESETS = ['auto', 'explore', 'debug', 'modify', 'refactor'];
 
 function estimateTokens(text) { return Math.ceil(text.length / 4); }
 
-function resolveIntent(task, preset) {
+function resolveIntent(task, preset, projectRoot = null) {
   if (preset && preset !== 'auto' && PRESETS.includes(preset)) return preset;
   const t = (task || '').toLowerCase();
   if (/\b(bug|fix|error|fail|crash|broken|why|regress|exception|stack ?trace)\b/.test(t)) return 'debug';
   if (/\b(refactor|clean ?up|restructure|rename|extract|simplify)\b/.test(t)) return 'refactor';
   if (/\b(add|implement|create|build|new|change|update|modify|support)\b/.test(t)) return 'modify';
   if (/\b(how|what|where|understand|explain|explore|overview|architecture)\b/.test(t)) return 'explore';
-  return 'auto';
+  return llmIntent(task, projectRoot) || 'auto';
+}
+
+// LLM-assisted intent refinement (BR-022: rule-based must work with this off).
+// Only consulted when the regexes can't classify AND the LLM layer is enabled;
+// fails soft to 'auto' on any error, timeout, or off-preset answer.
+function llmIntent(task, projectRoot) {
+  if (!projectRoot || !task) return null;
+  const { llmState, runtimeAsk } = require('./runtime');
+  if (llmState(projectRoot).state !== 'running') return null;
+  const r = runtimeAsk(projectRoot,
+    `Classify this coding task into exactly one word from: explore, debug, modify, refactor. Task: ${task}\nAnswer with the single word only.`,
+    { timeout_ms: 10000 });
+  if (!r.ok) return null;
+  const word = r.answer.toLowerCase().trim().split(/\s+/).pop();
+  return PRESETS.includes(word) && word !== 'auto' ? word : null;
 }
 
 function isTestFile(p) { return /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[a-z]+$|_test\.[a-z]+$/.test(p); }
@@ -76,7 +91,7 @@ function tryRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return 
 function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repos, pivots: pivotCount = 2, session } = {}) {
   const db = openStore(engDir);
   const budget = max_tokens || cfg.capsule.max_tokens;
-  const intent = resolveIntent(task, preset);
+  const intent = resolveIntent(task, preset, projectRoot);
   const ranked = rankFiles(db, task, intent, repos);
   const pivotFiles = ranked.filter(r => r.score > 0).slice(0, pivotCount);
   const pivotKeys = pivotFiles.map(p => p.path);
