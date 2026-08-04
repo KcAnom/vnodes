@@ -68,6 +68,10 @@ const CODE_PATTERNS = {
     ['trigger', /^\s*create\s+(?:or\s+replace\s+)?trigger\s+[`"']?([\w.]+)/i],
   ],
   shell: [['function', /^\s*(?:function\s+)?([A-Za-z_]\w*)\s*\(\)\s*\{/]],
+  lua: [
+    ['function', /^\s*(?:local\s+)?function\s+([A-Za-z_][\w.:]*)/],
+    ['function', /^\s*(?:local\s+)?([A-Za-z_][\w.]*)\s*=\s*function\b/],
+  ],
   csharp: null, kotlin: null, swift: null, scala: null, // reuse java-ish
   c: [
     ['function', /^[A-Za-z_][\w\s*]*\s[*]?([A-Za-z_]\w*)\s*\([^;]*\)\s*\{?\s*$/],

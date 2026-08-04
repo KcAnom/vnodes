@@ -318,6 +318,21 @@ function resolveCsImport(spec, nsAnchors, types) {
   return hits && hits.length === 1 ? hits[0] : null;
 }
 
+// Lua: require("a.b") is dots-to-path against package.path — unknowable per
+// project, so probe importing-file-relative then repo-root (plus init.lua),
+// then fall back to a unique module basename. Externals (socket.http) miss all
+// three and stay unresolved.
+function resolveLuaImport(fromFile, spec, fileSet, luaFiles) {
+  const rel = spec.replace(/\./g, '/');
+  for (const base of [path.posix.join(path.posix.dirname(fromFile), rel), rel]) {
+    const norm = path.posix.normalize(base);
+    if (fileSet.has(`${norm}.lua`)) return `${norm}.lua`;
+    if (fileSet.has(`${norm}/init.lua`)) return `${norm}/init.lua`;
+  }
+  const hits = luaFiles.get(spec.split('.').pop());
+  return hits && hits.length === 1 ? hits[0] : null;
+}
+
 // Resolve an import specifier to a file in the indexed set. Bare package
 // specifiers stay unresolved — external deps are not graph nodes.
 function resolveImport(fromFile, spec, fileSet, ctx = {}) {
@@ -328,6 +343,7 @@ function resolveImport(fromFile, spec, fileSet, ctx = {}) {
   if (fromFile.endsWith('.swift')) return (ctx.swiftModules || new Map()).get(spec.split('.')[0]) || null;
   if (fromFile.endsWith('.java') || fromFile.endsWith('.kt')) return ctx.jvm ? resolveJvmImport(spec, ctx.jvm) : null;
   if (fromFile.endsWith('.cs')) return resolveCsImport(spec, ctx.csNamespaces || new Map(), ctx.csTypes || new Map());
+  if (fromFile.endsWith('.lua')) return resolveLuaImport(fromFile, spec, fileSet, ctx.luaFiles || new Map());
   if (spec.startsWith('.')) {
     return tryCandidates(
       path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), fileSet);
@@ -423,6 +439,15 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
     ctx.phpClasses = dbNameMap('class', '.php');
   }
   if (has('.java') || has('.kt')) ctx.jvm = jvmMaps(fileSet);
+  if (has('.lua')) {
+    ctx.luaFiles = new Map();
+    for (const f of fileSet) {
+      if (!f.endsWith('.lua')) continue;
+      const base = path.posix.basename(f, '.lua');
+      if (!ctx.luaFiles.has(base)) ctx.luaFiles.set(base, []);
+      ctx.luaFiles.get(base).push(f);
+    }
+  }
   if (has('.cs')) {
     ctx.csTypes = dbNameMap('class', '.cs');
     ctx.csNamespaces = new Map();
