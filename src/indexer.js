@@ -267,6 +267,57 @@ function swiftModuleMap(fileSet) {
   return map;
 }
 
+// Java/Kotlin: import paths mirror directory tails under some source root
+// (src/main/java/, decompiled trees, anything) — suffix-match the dotted path
+// against files sharing the type's basename; unique-basename fallback for
+// nonstandard layouts; one segment dropped retries inner classes. A trailing
+// dot marks a wildcard package import, anchored like a Go package.
+function jvmMaps(fileSet) {
+  const types = new Map(), dirs = new Map();
+  for (const f of fileSet) {
+    if (!f.endsWith('.java') && !f.endsWith('.kt')) continue;
+    const base = path.posix.basename(f).replace(/\.(java|kt)$/, '');
+    if (!types.has(base)) types.set(base, []);
+    types.get(base).push(f);
+    const d = path.posix.dirname(f);
+    if (!dirs.has(d) || f < dirs.get(d)) dirs.set(d, f);
+  }
+  return { types, dirs };
+}
+
+function resolveJvmImport(spec, { types, dirs }) {
+  const segs = spec.split('.').filter(Boolean);
+  if (!segs.length) return null;
+  if (spec.endsWith('.')) { // wildcard: unique package dir with this tail
+    const tail = segs.join('/');
+    let hit = null;
+    for (const [d, rep] of dirs) {
+      if (d === tail || d.endsWith(`/${tail}`)) { if (hit) return null; hit = rep; }
+    }
+    return hit;
+  }
+  const attempt = ss => {
+    const cand = types.get(ss[ss.length - 1]) || [];
+    const tail = `/${ss.join('/')}.`;
+    const exact = cand.filter(f => `/${f}`.endsWith(`${tail}java`) || `/${f}`.endsWith(`${tail}kt`));
+    if (exact.length === 1) return exact[0];
+    if (!exact.length && cand.length === 1) return cand[0];
+    return null;
+  };
+  return attempt(segs) || (segs.length > 1 ? attempt(segs.slice(0, -1)) : null);
+}
+
+// C#: `using X.Y` names a namespace; the declaring files are found via the
+// parser's namespace nodes. Edge anchors on <LastSegment>.cs in the namespace
+// when present, else its first file. `using static Type` and nested references
+// fall back to the unique-type map.
+function resolveCsImport(spec, nsAnchors, types) {
+  const direct = nsAnchors.get(spec);
+  if (direct) return direct;
+  const hits = types.get(spec.split('.').pop());
+  return hits && hits.length === 1 ? hits[0] : null;
+}
+
 // Resolve an import specifier to a file in the indexed set. Bare package
 // specifiers stay unresolved — external deps are not graph nodes.
 function resolveImport(fromFile, spec, fileSet, ctx = {}) {
@@ -275,6 +326,8 @@ function resolveImport(fromFile, spec, fileSet, ctx = {}) {
   if (fromFile.endsWith('.go')) return resolveGoImport(spec, ctx.goModule, ctx.goDirs || new Map());
   if (fromFile.endsWith('.php')) return resolvePhpImport(fromFile, spec, fileSet, ctx.phpPsr4 || [], ctx.phpClasses || new Map());
   if (fromFile.endsWith('.swift')) return (ctx.swiftModules || new Map()).get(spec.split('.')[0]) || null;
+  if (fromFile.endsWith('.java') || fromFile.endsWith('.kt')) return ctx.jvm ? resolveJvmImport(spec, ctx.jvm) : null;
+  if (fromFile.endsWith('.cs')) return resolveCsImport(spec, ctx.csNamespaces || new Map(), ctx.csTypes || new Map());
   if (spec.startsWith('.')) {
     return tryCandidates(
       path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), fileSet);
@@ -354,15 +407,28 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
   const ctx = { aliases };
   if (has('.go')) { ctx.goModule = loadGoModule(repoRoot); ctx.goDirs = goPackageDirs(fileSet); }
   if (has('.swift')) ctx.swiftModules = swiftModuleMap(fileSet);
+  // Name→files maps from the symbol table: unchanged files keep their node
+  // rows, so the DB is the complete view even on incremental runs.
+  const dbNameMap = (kind, likeExt) => {
+    const m = new Map();
+    for (const r of db.prepare(`SELECT name, file FROM nodes WHERE repo = ? AND kind = ? AND file LIKE ?`).all(alias, kind, `%${likeExt}`)) {
+      const rel = alias ? r.file.slice(alias.length + 1) : r.file;
+      if (!m.has(r.name)) m.set(r.name, []);
+      m.get(r.name).push(rel);
+    }
+    return m;
+  };
   if (has('.php')) {
     ctx.phpPsr4 = loadComposerPsr4(repoRoot);
-    ctx.phpClasses = new Map();
-    // Class map from the symbol table: unchanged files keep their node rows,
-    // so the DB is the complete view even on incremental runs.
-    for (const r of db.prepare("SELECT name, file FROM nodes WHERE repo = ? AND kind = 'class' AND file LIKE '%.php'").all(alias)) {
-      const rel = alias ? r.file.slice(alias.length + 1) : r.file;
-      if (!ctx.phpClasses.has(r.name)) ctx.phpClasses.set(r.name, []);
-      ctx.phpClasses.get(r.name).push(rel);
+    ctx.phpClasses = dbNameMap('class', '.php');
+  }
+  if (has('.java') || has('.kt')) ctx.jvm = jvmMaps(fileSet);
+  if (has('.cs')) {
+    ctx.csTypes = dbNameMap('class', '.cs');
+    ctx.csNamespaces = new Map();
+    for (const [ns, files] of dbNameMap('module', '.cs')) {
+      const anchor = files.find(f => path.posix.basename(f) === `${ns.split('.').pop()}.cs`);
+      ctx.csNamespaces.set(ns, anchor || files.sort()[0]);
     }
   }
   for (const [key, rel, imports] of pendingImports) {

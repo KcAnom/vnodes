@@ -86,7 +86,12 @@ CODE_PATTERNS.typescript = [
   ['enum', /^\s*(?:export\s+)?(?:const\s+)?enum\s+([A-Za-z_$][\w$]*)/],
 ];
 CODE_PATTERNS.cpp = CODE_PATTERNS.c;
-CODE_PATTERNS.csharp = CODE_PATTERNS.java;
+CODE_PATTERNS.csharp = [
+  ...CODE_PATTERNS.java,
+  // namespace declarations feed `using` resolution — C# namespaces have no
+  // path convention, so the declaring files ARE the map.
+  ['module', /^\s*namespace\s+([\w.]+)/],
+];
 CODE_PATTERNS.kotlin = [
   ['function', /^\s*(?:override\s+|private\s+|public\s+|internal\s+|suspend\s+)*fun\s+([A-Za-z_]\w*)/],
   ['class', /^\s*(?:data\s+|sealed\s+|open\s+|abstract\s+)*(?:class|interface|object)\s+([A-Za-z_]\w*)/],
@@ -210,6 +215,23 @@ function parseFile(relPath, text) {
         const name = m[1] || m[2];
         if (!['Self', 'Static', 'Parent'].includes(name)) imports.push(name);
       }
+    }
+    // Java/Kotlin: wildcard (`import com.foo.*;`) and static-member imports
+    // fail the generic pattern's line-end check. Wildcards keep a trailing dot
+    // so the resolver knows it's a package, statics drop the member segment.
+    if (lang === 'java' || lang === 'kotlin') {
+      const m = l.match(/^\s*import\s+(static\s+)?([\w.]+?)(\.\*)?(?:\s+as\s+\w+)?\s*;?\s*$/);
+      if (m) {
+        const spec = m[1] ? m[2].split('.').slice(0, -1).join('.') : m[2];
+        if (spec) imports.push(m[3] ? `${spec}.` : spec);
+        return;
+      }
+    }
+    // C#: `using Foo.Bar;` (plus global/static/alias forms) is namespace-level
+    // and matches no generic pattern. `using (` / `using var` never match.
+    if (lang === 'csharp') {
+      const m = l.match(/^\s*(?:global\s+)?using\s+(?:static\s+)?(?:\w+\s*=\s*)?([\w.]+)\s*;/);
+      if (m) { imports.push(m[1]); return; }
     }
     // Swift: @testable and item imports (`import struct Foo.Bar`) escape the
     // generic pattern; capture the module reference whole.
