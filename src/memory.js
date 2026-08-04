@@ -70,11 +70,15 @@ function searchMemory(engDir, query, { session = null, limit = 8 } = {}) {
 function sessionContext(engDir, { session = null, limit = 20 } = {}) {
   refreshStaleness(engDir);
   const db = openMemory(engDir);
-  // Cross-session recall: current and previous sessions both returned (SM-4).
-  const rows = db.prepare('SELECT * FROM observations ORDER BY ts DESC LIMIT ?').all(limit);
+  // Cross-session recall: current and previous sessions both returned (SM-4),
+  // but the caller's own session sorts first and each row says whose it is.
+  const rows = session
+    ? db.prepare('SELECT * FROM observations ORDER BY (session = ?) DESC, ts DESC LIMIT ?').all(session, limit)
+    : db.prepare('SELECT * FROM observations ORDER BY ts DESC LIMIT ?').all(limit);
   db.close();
   return rows.map(o => ({
     id: o.id, ts: o.ts, session: o.session, tool: o.tool, kind: o.kind,
+    ...(session ? { current_session: o.session === session } : {}),
     summary: o.summary, symbol: o.symbol, file: o.file, stale: !!o.stale,
     ...(o.stale ? { warning: 'stale: linked code changed since this was saved' } : {}),
   }));

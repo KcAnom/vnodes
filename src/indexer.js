@@ -229,6 +229,7 @@ function runIndex(projectRoot, cfg, log) {
   const t0 = Date.now();
   const engDir = engineDir(projectRoot);
   const db = openStore(engDir);
+  const firstRun = db.prepare('SELECT COUNT(*) c FROM files').get().c === 0;
   const ws = loadWorkspace(projectRoot);
   let manifest = {};
   const stats = [];
@@ -250,7 +251,10 @@ function runIndex(projectRoot, cfg, log) {
   // Committed manifest: small per-file content hashes (BR-001, BR-003).
   fs.writeFileSync(path.join(engDir, 'manifest.json'),
     JSON.stringify({ version: 1, files: manifest }, null, 0));
-  db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)').run('last_index', String(Date.now()));
+  const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
+  setMeta.run('last_index', String(Date.now()));
+  setMeta.run('last_index_ms', String(Date.now() - t0));
+  setMeta.run('last_index_first_run', firstRun ? '1' : '0');
   const nodeCount = db.prepare('SELECT COUNT(*) c FROM nodes').get().c;
   const edgeCount = db.prepare('SELECT COUNT(*) c FROM edges').get().c;
   const fileCount = db.prepare('SELECT COUNT(*) c FROM files').get().c;
@@ -298,6 +302,8 @@ function indexStatus(projectRoot) {
     repos: db.prepare('SELECT DISTINCT repo FROM files').all().map(r => r.repo || '(root)'),
     languages: db.prepare('SELECT lang, COUNT(*) c FROM files GROUP BY lang ORDER BY c DESC').all(),
     last_index: Number(db.prepare("SELECT value FROM meta WHERE key = 'last_index'").get()?.value || 0),
+    last_index_ms: Number(db.prepare("SELECT value FROM meta WHERE key = 'last_index_ms'").get()?.value || 0),
+    last_index_first_run: db.prepare("SELECT value FROM meta WHERE key = 'last_index_first_run'").get()?.value === '1',
   };
   db.close();
   // Empty/unsupported workspace must be surfaced explicitly, not silent (ERR-001).

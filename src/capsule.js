@@ -120,6 +120,12 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   }
 
   capsule.used_tokens = used;
+  // The first pivot is always included in full even when it alone exceeds the
+  // budget (a capsule with no pivot is useless) — report the overshoot honestly.
+  if (used > budget) {
+    capsule.truncated = true;
+    capsule.over_budget_tokens = used - budget;
+  }
   // Savings vs naive full-content of every considered file (savings envelope BR-010).
   const naive = [...pivotFiles, ...supporters].reduce((a, f) => {
     const c = readProjectFile(projectRoot, f.path);

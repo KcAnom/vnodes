@@ -6,10 +6,7 @@
     "skeleton_detail": "standard"
   },
   "llm": {
-    "extra_savings": "+30% typical",
-    "min_ram_gb": 6,
-    "download_size_gb": 3.5,
-    "intent_languages": 15
+    "min_ram_gb": 6
   },
   "mcp": {
     "port": 7821,
