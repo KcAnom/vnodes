@@ -13,9 +13,19 @@ function resolveTargets(db, target, repo) {
   return db.prepare(sql).all(...params).map(r => r.file);
 }
 
+// The files table records each key's repo alias ('' in single-repo mode) —
+// guessing the alias from the first path segment misreads src/ vs bin/ as
+// different repos on non-workspace projects.
+function repoMap(db) {
+  const m = new Map();
+  for (const r of db.prepare('SELECT path, repo FROM files').all()) m.set(r.path, r.repo);
+  return (key) => m.get(key) ?? '';
+}
+
 // Impact: who depends on this (reverse-edge BFS), depth-limited.
 function impactGraph(engDir, { target, depth = 3, cross_repo = true, repo = null }) {
   const db = openStore(engDir);
+  const repoOf = repoMap(db);
   const roots = resolveTargets(db, target, repo);
   if (!roots.length) { db.close(); return { target, found: false, hint: 'no file or symbol matched' }; }
   const revQ = db.prepare('SELECT src_file s, kind FROM edges WHERE dst_file = ?');
@@ -40,11 +50,10 @@ function impactGraph(engDir, { target, depth = 3, cross_repo = true, repo = null
   return { target, found: true, roots, dependents_total: seen.size - roots.length, levels };
 }
 
-function repoOf(key) { return key.includes('/') ? key.split('/')[0] : ''; }
-
 // Logic flow: shortest dependency path between two files/symbols (bidirectional edges).
 function logicFlow(engDir, { from, to, cross_repo = true, max_depth = 10 }) {
   const db = openStore(engDir);
+  const repoOf = repoMap(db);
   const starts = resolveTargets(db, from, null);
   const goals = new Set(resolveTargets(db, to, null));
   if (!starts.length || !goals.size) { db.close(); return { from, to, found: false, hint: 'endpoint not matched' }; }
