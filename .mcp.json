@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vnodes": {
+      "command": "node",
+      "args": [
+        "/Users/kc/vnodes/bin/vnodes.js",
+        "mcp",
+        "/Users/kc/vnodes"
+      ]
+    }
+  }
+}
