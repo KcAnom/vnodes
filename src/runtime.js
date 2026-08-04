@@ -63,16 +63,27 @@ function runtimeInfo(projectRoot, overrides = {}) {
   return { provider: 'claude-code', cli: 'claude', model: cfg.runtime.claude_model, argv: ['--model', cfg.runtime.claude_model, '-p'] };
 }
 
-// Ask the configured runtime one question (used by `vnodes llm ask` and any
-// future LLM-assisted intent refinement). Fails soft: engine never depends on it.
+// Is the configured runtime CLI actually on PATH? The enable/disable state
+// machine only records intent — this answers whether asking would work.
+function runtimeCliFound(projectRoot, overrides = {}) {
+  const rt = runtimeInfo(projectRoot, overrides);
+  try {
+    execFileSync(process.platform === 'win32' ? 'where' : 'which', [rt.cli], { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
+// Ask the configured runtime one question (used by `vnodes llm ask` and
+// LLM-assisted intent refinement). Fails soft: engine never depends on it.
 function runtimeAsk(projectRoot, prompt, overrides = {}) {
   const rt = runtimeInfo(projectRoot, overrides);
   try {
-    const out = execFileSync(rt.cli, [...rt.argv, prompt], { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execFileSync(rt.cli, [...rt.argv, prompt],
+      { encoding: 'utf8', timeout: overrides.timeout_ms || 120000, stdio: ['ignore', 'pipe', 'pipe'] });
     return { ...rt, ok: true, answer: out.trim() };
   } catch (e) {
     return { ...rt, ok: false, error: `runtime '${rt.provider}' (${rt.cli}) failed: ${e.code === 'ENOENT' ? 'CLI not found on PATH' : e.message}` };
   }
 }
 
-module.exports = { llmState, llmInstall, llmDisable, llmEnable, runtimeInfo, runtimeAsk };
+module.exports = { llmState, llmInstall, llmDisable, llmEnable, runtimeInfo, runtimeCliFound, runtimeAsk };

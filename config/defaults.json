@@ -15,7 +15,9 @@
   "index": {
     "max_file_size_kb": 512,
     "first_run_target_s": 30,
-    "manifest_rebuild_target_s": 5
+    "manifest_rebuild_target_s": 5,
+    "watch": true,
+    "watch_debounce_ms": 500
   },
   "log": {
     "truncate_lines": 500,
