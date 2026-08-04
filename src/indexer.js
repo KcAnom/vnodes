@@ -180,16 +180,106 @@ function resolveRustImport(fromFile, spec, fileSet) {
   return probe(selfDir, segs) || probe(crateRootDir(fromFile, fileSet), segs);
 }
 
+// Go imports name package directories via the go.mod module path, not files.
+// Strip the module prefix, then map the package dir to a representative .go
+// file already in the index. External packages have a foreign prefix → null.
+function loadGoModule(repoRoot) {
+  try {
+    const m = fs.readFileSync(path.join(repoRoot, 'go.mod'), 'utf8').match(/^module\s+(\S+)/m);
+    return m ? m[1] : null;
+  } catch { return null; }
+}
+
+function goPackageDirs(fileSet) {
+  const rep = new Map(); // package dir → representative non-test .go file
+  for (const f of fileSet) {
+    if (!f.endsWith('.go') || f.endsWith('_test.go')) continue;
+    const d = path.posix.dirname(f);
+    // Prefer <dir>/<dirname>.go (the conventional package anchor), else the
+    // lexicographically first file — Go imports name directories, not files.
+    const anchor = d === '.' ? null : `${d}/${path.posix.basename(d)}.go`;
+    const cur = rep.get(d);
+    if (f === anchor || !cur || (cur !== anchor && f < cur)) rep.set(d, f);
+  }
+  return rep;
+}
+
+function resolveGoImport(spec, goModule, goDirs) {
+  if (!goModule) return null;
+  if (spec === goModule) return goDirs.get('.') || null;
+  if (!spec.startsWith(goModule + '/')) return null;
+  return goDirs.get(spec.slice(goModule.length + 1)) || null;
+}
+
+// PHP: PSR-4 prefixes from composer.json map namespaces to directories; when a
+// project autoloads its own way (legacy underscore classes, custom loaders),
+// fall back to the class name → defining-file map built from the symbol table.
+// Ambiguous class names resolve to nothing — no fabricated edges.
+function loadComposerPsr4(repoRoot) {
+  const out = [];
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(repoRoot, 'composer.json'), 'utf8'));
+    for (const src of [j.autoload?.['psr-4'], j['autoload-dev']?.['psr-4']]) {
+      for (const [prefix, dir] of Object.entries(src || {})) {
+        for (const d of Array.isArray(dir) ? dir : [dir])
+          out.push({ prefix, dir: String(d).replace(/\/+$/, '') });
+      }
+    }
+  } catch {}
+  return out.sort((a, b) => b.prefix.length - a.prefix.length);
+}
+
+function resolvePhpImport(fromFile, spec, fileSet, psr4, classes) {
+  if (spec.includes('/') || spec.endsWith('.php')) { // path-style require/include literal
+    const sibling = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec));
+    if (fileSet.has(sibling)) return sibling;
+    const norm = path.posix.normalize(spec.replace(/^\/+/, ''));
+    return fileSet.has(norm) ? norm : null;
+  }
+  const segs = spec.split('\\').filter(Boolean);
+  if (!segs.length) return null;
+  for (const { prefix, dir } of psr4) {
+    if ((spec + '\\').startsWith(prefix)) {
+      const rest = spec.slice(prefix.length).split('\\').filter(Boolean);
+      const cand = path.posix.normalize(path.posix.join(dir, rest.join('/')) + '.php');
+      if (fileSet.has(cand)) return cand;
+    }
+  }
+  const hits = classes.get(segs[segs.length - 1]);
+  return hits && hits.length === 1 ? hits[0] : null;
+}
+
+// Swift: `import X` names a SwiftPM target, conventionally rooted at
+// Sources/<X>/ (or Tests/<X>/). Anchor the edge on <X>.swift in that root when
+// present, else the lexicographically first file — same shape as Go packages.
+function swiftModuleMap(fileSet) {
+  const map = new Map();
+  for (const f of fileSet) {
+    if (!f.endsWith('.swift')) continue;
+    const m = f.match(/(?:^|\/)(?:Sources|Tests)\/([^/]+)\//);
+    if (!m) continue;
+    const mod = m[1];
+    const rootEnd = f.indexOf(`/${mod}/`, m.index) + mod.length + 2;
+    const anchor = `${f.slice(0, rootEnd)}/${mod}.swift`;
+    const cur = map.get(mod);
+    if (f === anchor || !cur || (cur !== anchor && f < cur)) map.set(mod, f);
+  }
+  return map;
+}
+
 // Resolve an import specifier to a file in the indexed set. Bare package
 // specifiers stay unresolved — external deps are not graph nodes.
-function resolveImport(fromFile, spec, fileSet, aliases = []) {
+function resolveImport(fromFile, spec, fileSet, ctx = {}) {
   if (fromFile.endsWith('.py')) return resolvePythonImport(fromFile, spec, fileSet);
   if (fromFile.endsWith('.rs')) return resolveRustImport(fromFile, spec, fileSet);
+  if (fromFile.endsWith('.go')) return resolveGoImport(spec, ctx.goModule, ctx.goDirs || new Map());
+  if (fromFile.endsWith('.php')) return resolvePhpImport(fromFile, spec, fileSet, ctx.phpPsr4 || [], ctx.phpClasses || new Map());
+  if (fromFile.endsWith('.swift')) return (ctx.swiftModules || new Map()).get(spec.split('.')[0]) || null;
   if (spec.startsWith('.')) {
     return tryCandidates(
       path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), fileSet);
   }
-  for (const a of aliases) {
+  for (const a of ctx.aliases || []) {
     if (a.wildcard ? spec.startsWith(a.prefix) : spec === a.prefix) {
       const tail = a.wildcard ? spec.slice(a.prefix.length) : '';
       let base = path.posix.normalize(a.target ? path.posix.join(a.target, tail) : tail);
@@ -256,11 +346,28 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
     delInEdges.run(gone);
     removed++;
   }
-  // Second pass: edges, once the full file set is known.
+  // Second pass: edges, once the full file set is known. Language-specific
+  // context (Go module map, PHP autoload data, Swift target map) is built once
+  // per repo, and only when the repo actually contains that language.
   const prefix = alias ? `${alias}/` : '';
+  const has = ext => { for (const f of fileSet) if (f.endsWith(ext)) return true; return false; };
+  const ctx = { aliases };
+  if (has('.go')) { ctx.goModule = loadGoModule(repoRoot); ctx.goDirs = goPackageDirs(fileSet); }
+  if (has('.swift')) ctx.swiftModules = swiftModuleMap(fileSet);
+  if (has('.php')) {
+    ctx.phpPsr4 = loadComposerPsr4(repoRoot);
+    ctx.phpClasses = new Map();
+    // Class map from the symbol table: unchanged files keep their node rows,
+    // so the DB is the complete view even on incremental runs.
+    for (const r of db.prepare("SELECT name, file FROM nodes WHERE repo = ? AND kind = 'class' AND file LIKE '%.php'").all(alias)) {
+      const rel = alias ? r.file.slice(alias.length + 1) : r.file;
+      if (!ctx.phpClasses.has(r.name)) ctx.phpClasses.set(r.name, []);
+      ctx.phpClasses.get(r.name).push(rel);
+    }
+  }
   for (const [key, rel, imports] of pendingImports) {
     for (const spec of imports) {
-      const dstRel = resolveImport(rel, spec, fileSet, aliases);
+      const dstRel = resolveImport(rel, spec, fileSet, ctx);
       // Ancestor-root probing can land back on the importing file itself
       // (e.g. `import util` inside util.py); a self-edge is not a dependency.
       if (dstRel && dstRel !== rel) insEdge.run(key, prefix + dstRel, 'import');

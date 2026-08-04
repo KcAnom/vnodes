@@ -76,7 +76,7 @@ const CODE_PATTERNS = {
   cpp: null, // reuse c
   php: [
     ['function', /^\s*(?:public\s+|private\s+|protected\s+|static\s+)*function\s+([A-Za-z_]\w*)/],
-    ['class', /^\s*(?:abstract\s+|final\s+)?class\s+([A-Za-z_]\w*)/],
+    ['class', /^\s*(?:abstract\s+|final\s+)?(?:class|interface|trait|enum)\s+([A-Za-z_]\w*)/],
   ],
 };
 CODE_PATTERNS.typescript = [
@@ -159,7 +159,64 @@ function parseFile(relPath, text) {
   const nodes = [];
   const imports = [];
   const lines = text.split('\n');
+  // Go groups most imports in `import ( ... )` blocks whose lines are bare
+  // quoted paths (optionally aliased) that no single-line pattern can see.
+  let goImportBlock = false;
   lines.forEach((l, i) => {
+    if (lang === 'go') {
+      if (goImportBlock) {
+        if (/^\s*\)/.test(l)) { goImportBlock = false; return; }
+        const m = l.match(/^\s*(?:[\w.]+\s+)?"([^"]+)"/);
+        if (m) imports.push(m[1]);
+        return;
+      }
+      if (/^\s*import\s*\(/.test(l)) { goImportBlock = true; return; }
+      const single = l.match(/^\s*import\s+(?:[\w.]+\s+)?"([^"]+)"/);
+      if (single) { imports.push(single[1]); return; }
+    }
+    // Rust grouped use: `use prefix::{a, b as c, self}` — expand each item to
+    // its full module path; the generic pattern below only sees the prefix.
+    if (lang === 'rust') {
+      const g = l.match(/^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([\w:]+)::\{([^}]*)\}/);
+      if (g) {
+        for (const raw of g[2].split(',')) {
+          const item = raw.trim().split(/\s+as\s+/)[0];
+          if (item === 'self' || item === '') imports.push(g[1]);
+          else if (/^[\w:]+$/.test(item)) imports.push(`${g[1]}::${item}`);
+        }
+        return; // generic use-pattern would re-capture the prefix with trailing '::'
+      }
+    }
+    // PHP namespaces use backslashes no generic pattern matches; requires may
+    // wrap the literal in parens and a __DIR__ prefix. `use` lines carry no
+    // symbols, so returning after a match loses nothing.
+    if (lang === 'php') {
+      const grp = l.match(/^\s*use\s+([\w\\]+)\\\{([^}]*)\}/);
+      if (grp) {
+        for (const raw of grp[2].split(',')) {
+          const item = raw.trim().split(/\s+as\s+/i)[0];
+          if (/^[\w\\]+$/.test(item)) imports.push(`${grp[1]}\\${item}`);
+        }
+        return;
+      }
+      const u = l.match(/^\s*use\s+(?:(?:function|const)\s+)?([\w\\]+)(?:\s+as\s+\w+)?\s*;/i);
+      if (u) { imports.push(u[1]); return; }
+      const req = l.match(/(?:require|include)(?:_once)?\s*\(?\s*(__DIR__\s*\.\s*)?['"]([^'"]+\.php)['"]/);
+      if (req) { imports.push(req[1] ? `.${req[2]}` : req[2]); return; }
+      // Legacy PHP wires without `use`: new X(), X::static, extends/implements.
+      // These lines can also declare symbols, so no early return. The resolver's
+      // unique-class guard keeps built-ins (Exception, DateTime) from edging.
+      for (const m of l.matchAll(/(?:\bnew\s+|\bextends\s+|\bimplements\s+)\\?([A-Z]\w*)|\b\\?([A-Z]\w*)::/g)) {
+        const name = m[1] || m[2];
+        if (!['Self', 'Static', 'Parent'].includes(name)) imports.push(name);
+      }
+    }
+    // Swift: @testable and item imports (`import struct Foo.Bar`) escape the
+    // generic pattern; capture the module reference whole.
+    if (lang === 'swift') {
+      const m = l.match(/^\s*(?:@testable\s+)?import\s+(?:(?:class|struct|enum|func|typealias|protocol|let|var)\s+)?([\w.]+)/);
+      if (m) { imports.push(m[1]); return; }
+    }
     if (patterns) {
       for (const [kind, re] of patterns) {
         const m = l.match(re);
