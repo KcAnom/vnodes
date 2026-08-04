@@ -32,7 +32,7 @@ function startMcpStdio(projectRootArg) {
         send({ jsonrpc: '2.0', id, result: {
           protocolVersion: params?.protocolVersion || '2025-06-18',
           capabilities: { tools: {} },
-          serverInfo: { name: 'vnodes', version: '1.0.0' },
+          serverInfo: { name: 'vnodes', version: require('../package.json').version },
         } });
       } else if (method === 'notifications/initialized' || method === 'initialized') {
         // notification — no response

@@ -83,9 +83,13 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       }, 'cli');
       if (flags.json) out(r);
       else {
-        out(`intent=${r.intent} used=${r.used_tokens}/${r.budget_tokens} tokens savings=${r.savings_pct}%`);
+        const cfg = require('../src/config').loadConfig(projectRoot);
+        out(`intent=${r.intent} used=${r.used_tokens}/${r.budget_tokens} tokens savings=${r.savings_pct}% (baseline ${cfg.capsule.savings_baseline})`);
         out(`pivots: ${r.pivots.map(p => p.file).join(', ') || '(none)'}`);
-        out(`skeletons: ${r.skeletons.length} files · memories: ${r.memories.length}${r.truncated ? ' · TRUNCATED to budget' : ''}`);
+        const trunc = r.over_budget_tokens
+          ? ` · OVER budget by ${r.over_budget_tokens} (single pivot larger than budget)`
+          : r.truncated ? ' · TRUNCATED to budget' : '';
+        out(`skeletons: ${r.skeletons.length} files · memories: ${r.memories.length}${trunc}`);
         out('(add --json for full content)');
       }
       break;

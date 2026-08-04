@@ -137,6 +137,15 @@ async function doctor(projectRoot) {
   const st = indexStatus(projectRoot);
   add('index', st.state === 'ready', `state: ${st.state}${st.nodes ? `, ${st.nodes} nodes / ${st.files} files / ${st.edges} edges` : ''}`);
 
+  // Index speed vs the configured targets (first_run_target_s for a from-scratch
+  // build, manifest_rebuild_target_s for incremental runs).
+  if (st.last_index_ms) {
+    const targetS = st.last_index_first_run ? cfg.index.first_run_target_s : cfg.index.manifest_rebuild_target_s;
+    const kind = st.last_index_first_run ? 'first run' : 'incremental';
+    add('index-speed', st.last_index_ms <= targetS * 1000,
+      `last ${kind} took ${(st.last_index_ms / 1000).toFixed(2)}s (target ${targetS}s)`);
+  }
+
   const eng = path.join(projectRoot, '.vnodes');
   const manifest = path.join(eng, 'manifest.json');
   add('manifest', fs.existsSync(manifest), fs.existsSync(manifest) ? 'committed manifest present' : 'missing — run: vnodes index');
