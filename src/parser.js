@@ -106,7 +106,8 @@ const IMPORT_PATTERNS = [
   /require\(\s*['"]([^'"]+)['"]\s*\)/,                // CJS
   /^\s*from\s+([\w.]+)\s+import\s+/,                  // python
   /^\s*import\s+([\w.]+)(?:\s+as\s+\w+)?\s*(?:[#;].*)?$/, // python / java-ish, incl. `as` alias
-  /^\s*use\s+([\w:]+)/,                               // rust
+  /^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+([\w:]+)/,      // rust use (incl. pub use re-exports)
+  /^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;/, // rust mod declaration (file-backed)
   /^\s*#include\s+["<]([^">]+)[">]/,                  // c/c++
   /^\s*require(?:_relative)?\s+['"]([^'"]+)['"]/,     // ruby
 ];

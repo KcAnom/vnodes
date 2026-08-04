@@ -85,9 +85,9 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       else {
         const cfg = require('../src/config').loadConfig(projectRoot);
         out(`intent=${r.intent} used=${r.used_tokens}/${r.budget_tokens} tokens savings=${r.savings_pct}% (baseline ${cfg.capsule.savings_baseline})`);
-        out(`pivots: ${r.pivots.map(p => p.file).join(', ') || '(none)'}`);
+        out(`pivots: ${r.pivots.map(p => p.file + (p.clipped ? ` (clipped ${p.tokens}/${p.full_tokens})` : '')).join(', ') || '(none)'}`);
         const trunc = r.over_budget_tokens
-          ? ` · OVER budget by ${r.over_budget_tokens} (single pivot larger than budget)`
+          ? ` · OVER budget by ${r.over_budget_tokens} (safety-net breach — report this)`
           : r.truncated ? ' · TRUNCATED to budget' : '';
         out(`skeletons: ${r.skeletons.length} files · memories: ${r.memories.length}${trunc}`);
         out('(add --json for full content)');

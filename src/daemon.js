@@ -82,7 +82,7 @@ function serve(projectRoot) {
     if (req.method === 'GET' && req.url === '/status') {
       // UI must distinguish daemon-stopped from empty-index (ERR-005) — this
       // endpoint answering at all means the daemon is up; body carries index state.
-      return send(200, { daemon: 'running', pid: process.pid, port, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
+      return send(200, { daemon: 'running', pid: process.pid, port, project: projectRoot, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
     }
     if (req.method === 'GET' && req.url === '/tools') return send(200, { tools: TOOL_DEFS });
     if (req.method === 'GET' && req.url.startsWith('/ui')) {
@@ -211,14 +211,27 @@ async function doctor(projectRoot) {
   const ds = daemonState(projectRoot);
   add('daemon', true, ds.running ? `running pid=${ds.pid} port=${ds.port}` : ds.stale_pidfile ? `stale pidfile (pid ${ds.pid} dead) — will auto-restart on next tool call` : 'stopped — auto-restarts on tool call');
 
-  // Transport: is the configured port free or held by our daemon?
+  // Transport: is the configured port free, held by our daemon, or held by a
+  // vnodes daemon serving another project? The last case is healthy — daemons
+  // are per-project but share the default port, and stdio transport (the
+  // default) doesn't touch the port at all.
   const portFree = await new Promise(res => {
     const s = net.createServer().once('error', () => res(false)).once('listening', () => { s.close(); res(true); });
     s.listen(cfg.mcp.port, '127.0.0.1');
   });
-  add('transport', ds.running ? !portFree : portFree,
+  let holder = null;
+  if (!portFree && !ds.running) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${cfg.mcp.port}/status`, { signal: AbortSignal.timeout(500) });
+      const j = await r.json();
+      if (j && j.daemon === 'running') holder = j;
+    } catch {}
+  }
+  add('transport', ds.running ? !portFree : (portFree || !!holder),
     ds.running ? (portFree ? 'pidfile says running but port is free — kill stale daemon' : `port ${cfg.mcp.port} held by daemon`)
-      : (portFree ? `port ${cfg.mcp.port} free for HTTP transport (stdio is default)` : `port ${cfg.mcp.port} taken by another process — set VNODES_PORT`));
+      : portFree ? `port ${cfg.mcp.port} free for HTTP transport (stdio is default)`
+        : holder ? `port ${cfg.mcp.port} held by vnodes daemon for ${holder.project || 'another project'} (pid ${holder.pid}) — stdio unaffected; set VNODES_PORT for HTTP here`
+          : `port ${cfg.mcp.port} taken by a non-vnodes process — set VNODES_PORT`);
 
   // LLM layer: state machine says enabled, but does the runtime CLI exist?
   const { llmState, runtimeInfo, runtimeCliFound } = require('./runtime');

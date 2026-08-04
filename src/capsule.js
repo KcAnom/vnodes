@@ -103,13 +103,28 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   let used = 0;
   const capsule = { intent, budget_tokens: budget, pivots: [], skeletons: [], memories: [], truncated: false };
 
+  const pivotBudget = Math.floor(budget * 0.7);
   for (const p of pivotFiles) {
     const content = readProjectFile(projectRoot, p.path);
     if (content == null) continue;
     const tok = estimateTokens(content);
-    if (used + tok > budget * 0.7 && capsule.pivots.length > 0) {
-      // Pivot doesn't fit: degrade to skeleton rather than blow the budget.
-      supporters.unshift(p);
+    if (used + tok > pivotBudget) {
+      if (capsule.pivots.length > 0) {
+        // Pivot doesn't fit: degrade to skeleton rather than blow the budget.
+        supporters.unshift(p);
+        continue;
+      }
+      // First pivot alone exceeds the budget: clip it to fit. A capsule with no
+      // pivot is useless, but an unbounded one breaks the budget contract
+      // (BR-008) — the head of the file plus its skeleton beats either extreme.
+      const clipped = content.slice(0, Math.max(0, pivotBudget - used) * 4);
+      capsule.pivots.push({
+        file: p.path, tokens: estimateTokens(clipped), content: clipped,
+        clipped: true, full_tokens: tok,
+      });
+      used += estimateTokens(clipped);
+      capsule.truncated = true;
+      supporters.unshift(p); // its skeleton still shows the symbols the clip cut off
       continue;
     }
     capsule.pivots.push({ file: p.path, tokens: tok, content });
@@ -135,8 +150,8 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   }
 
   capsule.used_tokens = used;
-  // The first pivot is always included in full even when it alone exceeds the
-  // budget (a capsule with no pivot is useless) — report the overshoot honestly.
+  // Safety net: with pivot clipping above, the budget should never overflow;
+  // if it somehow does, report it rather than hide it.
   if (used > budget) {
     capsule.truncated = true;
     capsule.over_budget_tokens = used - budget;

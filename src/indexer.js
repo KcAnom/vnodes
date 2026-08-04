@@ -136,10 +136,55 @@ function resolvePythonImport(fromFile, spec, fileSet) {
   }
 }
 
+// Rust paths are module paths, not filesystem paths. `crate::` roots at the
+// nearest lib.rs/main.rs ancestor, `super::` walks up module dirs, `self::`
+// stays put, and a bare head is either a `mod` sibling or a 2015-edition
+// crate-root module — external crates (std, serde, …) simply never resolve.
+// Trailing segments may be items rather than modules, so probe prefixes
+// longest-first against both `<path>.rs` and `<path>/mod.rs`.
+function crateRootDir(fromFile, fileSet) {
+  let dir = path.posix.dirname(fromFile);
+  for (;;) {
+    const at = p => fileSet.has(dir === '.' ? p : `${dir}/${p}`);
+    if (at('lib.rs') || at('main.rs')) return dir;
+    if (dir === '.' || dir === '') return path.posix.dirname(fromFile);
+    dir = path.posix.dirname(dir);
+  }
+}
+
+function resolveRustImport(fromFile, spec, fileSet) {
+  const segs = spec.split('::').filter(Boolean);
+  if (!segs.length) return null;
+  const fromDir = path.posix.dirname(fromFile);
+  const base = path.posix.basename(fromFile, '.rs');
+  // Child modules of a/b.rs live in a/b/; mod.rs, lib.rs and main.rs own their dir.
+  const selfDir = ['mod', 'lib', 'main'].includes(base) ? fromDir : path.posix.join(fromDir, base);
+  const probe = (rootDir, rest) => {
+    for (let n = rest.length; n >= 1; n--) {
+      const rel = rest.slice(0, n).join('/');
+      const cand = rootDir === '.' || rootDir === '' ? rel : `${rootDir}/${rel}`;
+      if (fileSet.has(`${cand}.rs`)) return `${cand}.rs`;
+      if (fileSet.has(`${cand}/mod.rs`)) return `${cand}/mod.rs`;
+    }
+    return null;
+  };
+  const head = segs[0];
+  if (head === 'crate') return probe(crateRootDir(fromFile, fileSet), segs.slice(1));
+  if (head === 'self') return probe(selfDir, segs.slice(1));
+  if (head === 'super') {
+    let dir = path.posix.dirname(selfDir);
+    let rest = segs.slice(1);
+    while (rest[0] === 'super') { dir = path.posix.dirname(dir); rest = rest.slice(1); }
+    return probe(dir, rest);
+  }
+  return probe(selfDir, segs) || probe(crateRootDir(fromFile, fileSet), segs);
+}
+
 // Resolve an import specifier to a file in the indexed set. Bare package
 // specifiers stay unresolved — external deps are not graph nodes.
 function resolveImport(fromFile, spec, fileSet, aliases = []) {
   if (fromFile.endsWith('.py')) return resolvePythonImport(fromFile, spec, fileSet);
+  if (fromFile.endsWith('.rs')) return resolveRustImport(fromFile, spec, fileSet);
   if (spec.startsWith('.')) {
     return tryCandidates(
       path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec)), fileSet);
