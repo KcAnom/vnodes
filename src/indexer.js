@@ -259,7 +259,7 @@ function swiftModuleMap(fileSet) {
     const m = f.match(/(?:^|\/)(?:Sources|Tests)\/([^/]+)\//);
     if (!m) continue;
     const mod = m[1];
-    const rootEnd = f.indexOf(`/${mod}/`, m.index) + mod.length + 2;
+    const rootEnd = f.indexOf(`/${mod}/`, m.index) + mod.length + 1;
     const anchor = `${f.slice(0, rootEnd)}/${mod}.swift`;
     const cur = map.get(mod);
     if (f === anchor || !cur || (cur !== anchor && f < cur)) map.set(mod, f);
