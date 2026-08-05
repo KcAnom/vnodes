@@ -5,7 +5,7 @@ description: Operate the vnodes local code-graph context engine (~/vnodes) on th
 
 # vnodes operator
 
-vnodes is the owner's local-first code-graph context engine at `/Users/kc/vnodes`
+vnodes is the owner's local-first code-graph context engine at `/Users/kcdacre8tor/vnodes`
 (CLI on PATH as `vnodes`, symlinked in `~/bin`). It indexes a project into
 `.vnodes/index.db` (gitignored; `manifest.json` is committed for incremental
 clone rebuilds), serves 10 MCP tools over stdio, assembles token-budgeted

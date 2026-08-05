@@ -3,9 +3,9 @@
     "vnodes": {
       "command": "node",
       "args": [
-        "/Users/kc/vnodes/bin/vnodes.js",
+        "/Users/kcdacre8tor/vnodes/bin/vnodes.js",
         "mcp",
-        "/Users/kc/vnodes"
+        "/Users/kcdacre8tor/vnodes"
       ]
     }
   }
