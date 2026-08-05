@@ -21,13 +21,65 @@ function fixture(files) {
   return root;
 }
 
-function edgesOf(root) {
-  runIndex(root, loadConfig(root));
+function readEdges(root) {
   const db = openStore(engineDir(root));
   const rows = db.prepare('SELECT src_file, dst_file FROM edges ORDER BY src_file, dst_file').all();
   db.close();
   return rows.map(r => `${r.src_file} -> ${r.dst_file}`);
 }
+
+function edgesOf(root) {
+  runIndex(root, loadConfig(root));
+  return readEdges(root);
+}
+
+test('incremental: the edge set always equals a cold rebuild', () => {
+  // Whether an import resolves depends on the whole file set, not on the
+  // importing file's bytes, so a file that never changes still has to be
+  // re-resolved when its targets appear, vanish or come back. Skipping it on a
+  // content hash loses edges permanently and silently — impact then answers
+  // found:true, dependents:0 for a file that genuinely has dependents.
+  const base = {
+    'src/a.ts': "import './b';\nimport './c';\nexport const a = 1;\n",
+    'src/b.ts': 'export const b = 1;\n',
+  };
+  const withC = { ...base, 'src/c.ts': 'export const c = 1;\n' };
+  const root = fixture(base);
+  const cold = tree => edgesOf(fixture(tree));
+  const warm = () => { runIndex(root, loadConfig(root)); return readEdges(root); };
+  const cPath = path.join(root, 'src/c.ts');
+
+  assert.deepStrictEqual(warm(), cold(base));
+
+  // a.ts is byte-identical through every step below.
+  fs.writeFileSync(cPath, withC['src/c.ts']);
+  assert.deepStrictEqual(warm(), cold(withC), 'a target that appeared never reached its importer');
+
+  fs.unlinkSync(cPath);
+  assert.deepStrictEqual(warm(), cold(base), 'a removed target left a stale edge');
+
+  fs.writeFileSync(cPath, withC['src/c.ts']);
+  assert.deepStrictEqual(warm(), cold(withC), 'the edge never came back');
+});
+
+test('workspace: aliased edges are rebuilt, not lost, on an incremental run', () => {
+  // Edges are cleared per repo and re-derived every run, and in a workspace
+  // both sides of that are alias-prefixed. Nothing else covers multi-repo.
+  const root = fixture({
+    'main/src/app.ts': "import './util';\nexport const app = 1;\n",
+    'main/src/util.ts': 'export const util = 1;\n',
+    'lib/src/helper.ts': "import './shared';\nexport const helper = 1;\n",
+    'lib/src/shared.ts': 'export const shared = 1;\n',
+    'main/.vnodes/workspace.json': JSON.stringify({
+      name: 'ws', primary_alias: 'main', repos: [{ alias: 'lib', path: '../lib' }],
+    }),
+  });
+  const primary = path.join(root, 'main');
+  const first = edgesOf(primary);
+  assert.ok(first.includes('main/src/app.ts -> main/src/util.ts'), 'primary repo edge missing');
+  assert.ok(first.includes('lib/src/helper.ts -> lib/src/shared.ts'), 'secondary repo edge missing');
+  assert.deepStrictEqual(edgesOf(primary), first, 'an incremental run dropped aliased edges');
+});
 
 test('js/ts: relative imports and tsconfig aliases', () => {
   const root = fixture({
