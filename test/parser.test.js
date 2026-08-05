@@ -182,6 +182,83 @@ test('dart: constructor calls in top-level literals are not declarations', () =>
     'constructor call captured as a declaration');
 });
 
+test('dart: private and generated constructors are declarations too', () => {
+  const r = parseFile('lib/card.dart', [
+    'class _Card extends StatelessWidget {',
+    '  const _Card({this.label});',
+    '  _Card.raw(this.label);',
+    '}',
+    'class $Model {',
+    '  factory $Model.fromJson(Map<String, dynamic> json) => $Model();',
+    '}',
+  ].join('\n'));
+  const ctors = r.nodes.filter(n => n.kind === 'constructor').map(n => n.name);
+  assert.deepStrictEqual(ctors, ['_Card', '_Card.raw', '$Model.fromJson']);
+});
+
+test('dart: code inside a multi-line string is data, not code', () => {
+  const r = parseFile('lib/init_command.dart', [
+    "import 'dart:io';",
+    'class InitCommand {',
+    '  String template() {',
+    "    return '''",
+    "import 'package:phluts/phluts_core.dart';",
+    'class HelloWorld extends StatelessWidget {',
+    '  const HelloWorld();',
+    '}',
+    "''';",
+    '  }',
+    '}',
+  ].join('\n'));
+  assert.deepStrictEqual(r.imports, ['dart:io'],
+    'an import inside a template string became a real dependency');
+  assert.ok(!r.nodes.some(n => n.name === 'HelloWorld'),
+    'a class inside a template string became a real node');
+});
+
+test('dart: operator overloads are captured, call sites are not', () => {
+  const r = parseFile('lib/access.dart', [
+    'class ProjectAccess {',
+    '  @override',
+    '  bool operator ==(Object other) => other is ProjectAccess;',
+    '  @override',
+    '  int get hashCode => 0;',
+    '  ProjectAccess operator +(ProjectAccess other) => this;',
+    '  String operator [](int i) => "x";',
+    '}',
+    'void use() {',
+    '  if (a == b) print(a[0]);',
+    '}',
+  ].join('\n'));
+  const ops = r.nodes.filter(n => n.signature.includes('operator ')).map(n => n.name);
+  assert.deepStrictEqual(ops, ['==', '+', '[]']);
+  assert.ok(r.nodes.some(n => n.kind === 'getter' && n.name === 'hashCode'),
+    'the getter that pairs with == stopped being captured');
+});
+
+test('dart: configurable import alternatives are captured', () => {
+  const r = parseFile('lib/log.dart', [
+    "import 'package:phluts_logger/src/log_interface.dart';",
+    "import 'log_stub.dart'",
+    "    if (dart.library.io) 'log_io.dart'",
+    "    if (dart.library.js_interop) 'log_web.dart';",
+    "export 'shim_stub.dart' if (dart.library.io) 'shim_io.dart';",
+    // A collection-if in a map literal is the near-miss the `dart.library.`
+    // anchor exists to reject.
+    'const routes = {',
+    "  if (kIsWeb) 'web': WebRoute(),",
+    '};',
+  ].join('\n'));
+  assert.deepStrictEqual(r.imports, [
+    'package:phluts_logger/src/log_interface.dart',
+    'log_stub.dart',
+    'log_io.dart',
+    'log_web.dart',
+    'shim_io.dart',
+    'shim_stub.dart',
+  ]);
+});
+
 test('csharp: using forms captured, using-statements not, namespace as node', () => {
   const r = parseFile('src/A.cs', [
     'global using App.Shared;', 'using App.Services;', 'using static App.Core.Util;',

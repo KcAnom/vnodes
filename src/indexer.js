@@ -333,9 +333,52 @@ function resolveLuaImport(fromFile, spec, fileSet, luaFiles) {
   return hits && hits.length === 1 ? hits[0] : null;
 }
 
+// Dart addresses its own code by package name, not path: `package:foo/a.dart`
+// means <dir-of-the-pubspec-naming-foo>/lib/a.dart. In a monorepo those
+// pubspecs are scattered, so every one in the tree is read. Packages absent
+// from the map are third-party (pub cache, outside the index) → null.
+function dartPackageRoots(repoRoot, fileSet) {
+  const roots = new Map(); // package name → dir holding its pubspec ('' at root)
+  for (const f of fileSet) {
+    if (path.posix.basename(f) !== 'pubspec.yaml') continue;
+    try {
+      const m = fs.readFileSync(path.join(repoRoot, f), 'utf8').match(/^name:\s*['"]?([\w.]+)['"]?/m);
+      if (!m) continue;
+      const dir = path.posix.dirname(f);
+      const next = dir === '.' ? '' : dir;
+      const cur = roots.get(m[1]);
+      // A vendored copy can duplicate a name; the shallowest pubspec wins so
+      // the choice does not depend on walk order. The root pubspec's dir is '',
+      // and ''.split('/').length is 1 — the same as a top-level 'app' — so depth
+      // has to be computed, not taken from the segment count, or root-vs-
+      // top-level ties fall back to walk order and break that guarantee.
+      const depth = d => (d === '' ? 0 : d.split('/').length);
+      if (cur === undefined || depth(next) < depth(cur)) roots.set(m[1], next);
+    } catch {}
+  }
+  return roots;
+}
+
+function resolveDartImport(fromFile, spec, fileSet, roots) {
+  if (spec.startsWith('dart:')) return null; // SDK, never a file in the tree
+  if (spec.startsWith('package:')) {
+    const rest = spec.slice(8);
+    const slash = rest.indexOf('/');
+    if (slash < 0) return null;
+    const dir = roots.get(rest.slice(0, slash));
+    if (dir === undefined) return null;
+    const p = path.posix.normalize(path.posix.join(dir, 'lib', rest.slice(slash + 1)));
+    return fileSet.has(p) ? p : null;
+  }
+  // Everything else is relative — Dart allows a bare sibling with no './'.
+  const p = path.posix.normalize(path.posix.join(path.posix.dirname(fromFile), spec));
+  return fileSet.has(p) ? p : null;
+}
+
 // Resolve an import specifier to a file in the indexed set. Bare package
 // specifiers stay unresolved — external deps are not graph nodes.
 function resolveImport(fromFile, spec, fileSet, ctx = {}) {
+  if (fromFile.endsWith('.dart')) return resolveDartImport(fromFile, spec, fileSet, ctx.dartRoots || new Map());
   if (fromFile.endsWith('.py')) return resolvePythonImport(fromFile, spec, fileSet);
   if (fromFile.endsWith('.rs')) return resolveRustImport(fromFile, spec, fileSet);
   if (fromFile.endsWith('.go')) return resolveGoImport(spec, ctx.goModule, ctx.goDirs || new Map());
@@ -432,6 +475,7 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
   const ctx = { aliases };
   if (has('.go')) { ctx.goModule = loadGoModule(repoRoot); ctx.goDirs = goPackageDirs(fileSet); }
   if (has('.swift')) ctx.swiftModules = swiftModuleMap(fileSet);
+  if (has('.dart')) ctx.dartRoots = dartPackageRoots(repoRoot, fileSet);
   // Name→files maps from the symbol table: unchanged files keep their node
   // rows, so the DB is the complete view even on incremental runs.
   const dbNameMap = (kind, likeExt) => {
