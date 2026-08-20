@@ -9,4 +9,5 @@ node_modules/
 # through the user-scope registration in ~/.claude.json instead.
 .mcp.json
 .cursor/
+.gemini/
 .claude/settings.local.json
