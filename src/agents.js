@@ -179,4 +179,4 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
   return { detected: detected.map(a => ({ id: a.id, name: a.name, installed: a.installed })), configured: results, personalMode };
 }
 
-module.exports = { detectAgents, setupAgents, instructionText, inRepo, AGENTS };
+module.exports = { detectAgents, setupAgents, instructionText, inRepo, upsertMcpJson, AGENTS };

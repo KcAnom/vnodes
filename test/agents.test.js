@@ -6,8 +6,18 @@
 // addition — these tests are what make that regression impossible.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { instructionText, inRepo, AGENTS } = require('../src/agents');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { instructionText, inRepo, upsertMcpJson, AGENTS } = require('../src/agents');
 const { TOOL_DEFS } = require('../src/tools');
+
+function tmpJson(contents) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-agents-'));
+  const file = path.join(dir, 'settings.json');
+  if (contents !== undefined) fs.writeFileSync(file, contents);
+  return file;
+}
 
 test('instruction block names every tool in the live catalog', () => {
   const block = instructionText('/tmp/example-project');
@@ -45,6 +55,37 @@ test('every agent with a config outside the repo resolves by cwd', () => {
   for (const a of globals) {
     assert.strictEqual(inRepo(a.file, '/tmp/some-project'), false, `${a.id} must not pin`);
   }
+});
+
+// These configs are shared with the agent's own settings — a registration must
+// add one key and disturb nothing else, including a user's hand-written
+// hooks/security blocks in a home-directory settings file.
+test('registration merges into an existing config without clobbering it', () => {
+  const file = tmpJson(JSON.stringify({
+    security: { trust: 'strict' },
+    mcpServers: { other: { command: 'foo' } },
+  }, null, 2));
+  const r = upsertMcpJson(file, '/tmp/proj', { pinRoot: true });
+  assert.strictEqual(r.ok, true);
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepStrictEqual(after.security, { trust: 'strict' }, 'unrelated keys must survive');
+  assert.deepStrictEqual(after.mcpServers.other, { command: 'foo' }, 'other servers must survive');
+  assert.deepStrictEqual(after.mcpServers.vnodes.args.slice(-2), ['mcp', '/tmp/proj']);
+});
+
+test('registration omits the project root when it must resolve by cwd', () => {
+  const file = tmpJson('{}');
+  upsertMcpJson(file, '/tmp/proj', { pinRoot: false });
+  const args = JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers.vnodes.args;
+  assert.strictEqual(args[args.length - 1], 'mcp', 'no root may follow the mcp subcommand');
+  assert.ok(!args.includes('/tmp/proj'), 'a cwd-resolving registration must not name a project');
+});
+
+test('a config that is not valid JSON is reported, never overwritten', () => {
+  const file = tmpJson('{ this is not json');
+  const r = upsertMcpJson(file, '/tmp/proj');
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(fs.readFileSync(file, 'utf8'), '{ this is not json');
 });
 
 test('instruction block is marker-delimited so hand-written prose survives', () => {
