@@ -19,18 +19,32 @@ Zero dependencies — Node 22+ only (`node:sqlite` for the graph store).
   (auto/explore/debug/modify/refactor; debug pulls tests), graph-ranked pivot
   files in full + supporter skeletons, fitted to a token budget (default 8000),
   with relevant memories attached with rationale.
-- **MCP server (M3)** — stdio by default (`vnodes mcp`), HTTP opt-in on port
-  7821. Ten tools: run_pipeline, get_context_capsule, get_impact_graph,
-  search_logic_flow, get_skeleton, get_session_context, search_memory,
-  save_observation, index_status, workspace_setup.
+- **MCP server (M3)** — `vnodes mcp`, MCP over stdio. Ten tools: run_pipeline,
+  get_context_capsule, get_impact_graph, search_logic_flow, get_skeleton,
+  get_session_context, search_memory, save_observation, index_status,
+  workspace_setup. The daemon's HTTP transport (port 7821) shares the same tool
+  dispatch but is **not** MCP: `POST /rpc` takes `{tool, arguments, session}`
+  and returns a plain JSON result — no JSON-RPC envelope, no `initialize`, no
+  `tools/list`. An MCP client that speaks HTTP cannot talk to it; give those
+  agents the stdio command.
 - **Session memory (M4)** — every tool call auto-captured; observations
   auto-surface with rationale; linked-code changes flag them stale (demoted,
   warned, never deleted).
-- **Agent setup (M5)** — `vnodes setup` detects installed agents (Claude Code,
-  Cursor, Codex, Windsurf, Gemini CLI, Cline; Opencode/Augment
-  instructions-only) and writes MCP registration + instruction blocks inside
-  markers — hand-written content untouched. `--personal` skips all shared-repo
-  writes.
+- **Agent setup (M5)** — `vnodes setup` detects installed agents and writes an
+  MCP registration plus an instruction block inside markers; hand-written
+  content is never touched, and the instruction block is generated from the
+  live tool catalog so it cannot fall behind. `--personal` skips all
+  shared-repo writes; `vnodes setup --detect` lists the known agents and which
+  of them are installed. Two rules decide the shape of a registration:
+  - **Where the config lives decides whether a project root is pinned.** A
+    config inside the repo names an absolute root. A config in the home
+    directory is shared by every project the agent opens, so it is written
+    without one and the server resolves the project upward from its working
+    directory — otherwise the last `vnodes setup` to run anywhere would point
+    that agent at one repo everywhere.
+  - **Agents with no MCP client get instructions only** and reach vnodes
+    through the CLI or their own bridge. `src/agents.js` is the source of
+    truth for which agents are which, and why.
 - **Multi-repo workspaces (M6)** — `.vnodes/workspace.json` (+ auto parent
   pointers in secondary repos); cross-repo shared-type edges; query scoping via
   `repos`, `cross_repo`, `repo`.
@@ -62,8 +76,13 @@ vnodes setup          # wire your installed agents to the MCP server
 vnodes doctor
 ```
 
-Claude Code: the `/vnodes` skill drives all of this; the MCP server is also
-registered at user scope as `vnodes`.
+`vnodes setup` is not optional on a fresh clone: the per-agent configs it
+writes (`.mcp.json`, `.cursor/`, `.gemini/`) bake in an absolute path, so they
+are gitignored and no clone carries them.
+
+Claude Code users may prefer driving all of this through a `/vnodes` operator
+skill. One is not shipped here — it would have to hardcode this machine's
+install path — so keep it at user scope in `~/.claude/skills/vnodes/`.
 
 ## Config
 
