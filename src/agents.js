@@ -30,6 +30,34 @@ function detectAgents() {
   return AGENTS.map(a => ({ ...a, installed: a.detect.some(d => fs.existsSync(expand(d))) }));
 }
 
+// Usage hints carry the judgment a tool's own description can't: when to reach
+// for it, and how often. Tools with no hint fall back to the first sentence of
+// their MCP description, so a tool added to TOOL_DEFS documents itself here
+// without a second edit — the instruction block can no longer drift behind the
+// catalog it describes.
+const TOOL_HINTS = {
+  run_pipeline: 'ONE call per task for orientation: pivot files in full, supporting skeletons, and prior-session memories with rationale, inside a token budget. Call it first, once, per task.',
+  get_impact_graph: 'who depends on a file/symbol before you change it.',
+  get_skeleton: 'signatures-only view instead of reading a whole file.',
+  save_observation: 'record a durable insight (link a file for staleness tracking).',
+  search_memory: 'recall findings from previous sessions.',
+  index_status: 'index health when a result looks stale or wrong.',
+};
+
+// First sentence only. Split on '. ' rather than any '.' or ':' so descriptions
+// that lead with a colon ("Index health: state, ...") survive intact.
+function firstSentence(text) {
+  const i = text.search(/\.(\s|$)/);
+  return (i === -1 ? text : text.slice(0, i + 1)).trim();
+}
+
+function toolCatalogLines() {
+  const { TOOL_DEFS } = require('./tools');
+  return TOOL_DEFS
+    .map(t => `- \`${t.name}\` — ${TOOL_HINTS[t.name] || firstSentence(t.description)}`)
+    .join('\n');
+}
+
 function instructionText(projectRoot) {
   return `${MARK_BEGIN}
 ## vnodes context engine
@@ -37,13 +65,7 @@ function instructionText(projectRoot) {
 This project is indexed by vnodes (local code-graph context engine). Prefer its
 MCP tools over raw file exploration:
 
-- \`run_pipeline\` — ONE call per task for orientation: pivot files in full,
-  supporting skeletons, and prior-session memories with rationale, inside a
-  token budget. Call it first, once, per task.
-- \`get_impact_graph\` — who depends on a file/symbol before you change it.
-- \`get_skeleton\` — signatures-only view instead of reading a whole file.
-- \`save_observation\` — record a durable insight (link a file for staleness tracking).
-- \`index_status\` — index health; \`search_memory\` — recall past findings.
+${toolCatalogLines()}
 
 Avoid re-sending full context every turn; one pipeline orientation call per
 task keeps session cost bounded.
@@ -138,4 +160,4 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
   return { detected: detected.map(a => ({ id: a.id, name: a.name, installed: a.installed })), configured: results, personalMode };
 }
 
-module.exports = { detectAgents, setupAgents, AGENTS };
+module.exports = { detectAgents, setupAgents, instructionText, AGENTS };

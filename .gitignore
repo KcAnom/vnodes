@@ -3,3 +3,10 @@
 node_modules/
 *.log
 .DS_Store
+
+# Per-machine agent configs. `vnodes setup` regenerates these and bakes an
+# absolute path into them, so they are local-only. Claude Code reaches vnodes
+# through the user-scope registration in ~/.claude.json instead.
+.mcp.json
+.cursor/
+.claude/settings.local.json
