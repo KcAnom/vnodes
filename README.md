@@ -1,9 +1,11 @@
 # vnodes
 
 Local-first code-graph context engine for AI coding agents. Built from the
-`vexp-operator` blueprint contract (`~/Documents/blueprints/vexp-operator`) —
-a black-box behavioral reimplementation, local-only scope: no licensing, no
-telemetry, zero outbound network calls, every feature unconditional.
+`vexp-operator` blueprint contract as a black-box behavioral reimplementation,
+local-only scope: no licensing, no telemetry, zero outbound network calls,
+every feature unconditional. That contract is where the `BR-###` / `ERR-###`
+codes in the source point, and where `config/defaults.json` was snapshotted
+from; it is not distributed with this repo.
 
 Zero dependencies — Node 22+ only (`node:sqlite` for the graph store).
 
