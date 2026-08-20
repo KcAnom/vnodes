@@ -20,7 +20,10 @@ const AGENTS = [
   { id: 'windsurf', name: 'Windsurf', detect: ['~/.codeium/windsurf', '/Applications/Windsurf.app'], kind: 'mcp-json', file: '~/.codeium/windsurf/mcp_config.json', instructions: '.windsurfrules' },
   { id: 'opencode', name: 'Opencode', detect: ['~/.config/opencode'], kind: 'instructions-only', instructions: 'AGENTS.md' },
   { id: 'augment', name: 'Augment', detect: ['~/.augment'], kind: 'instructions-only', instructions: '.augment-guidelines' },
-  { id: 'gemini-cli', name: 'Gemini CLI', detect: ['~/.gemini'], kind: 'mcp-json', file: '.gemini/settings.json', instructions: 'GEMINI.md' },
+  // Gemini merges user settings with workspace settings and the workspace copy
+  // wins, so a per-repo write would shadow the user-scope registration in every
+  // repo it touched. Register once at user scope; it resolves by cwd from there.
+  { id: 'gemini-cli', name: 'Gemini CLI', detect: ['~/.gemini'], kind: 'mcp-json', file: '~/.gemini/settings.json', instructions: 'GEMINI.md' },
   { id: 'cline', name: 'Cline', detect: ['~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev'], kind: 'mcp-json', file: '.cline/mcp.json', instructions: '.clinerules' },
 ];
 
