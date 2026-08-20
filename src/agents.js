@@ -25,6 +25,14 @@ const AGENTS = [
   // repo it touched. Register once at user scope; it resolves by cwd from there.
   { id: 'gemini-cli', name: 'Gemini CLI', detect: ['~/.gemini'], kind: 'mcp-json', file: '~/.gemini/settings.json', instructions: 'GEMINI.md' },
   { id: 'cline', name: 'Cline', detect: ['~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev'], kind: 'mcp-json', file: '.cline/mcp.json', instructions: '.clinerules' },
+  // pi ships no MCP client by design ("it intentionally does not include
+  // built-in MCP" — pi docs/usage.md), so there is nothing to register: a
+  // ~/.pi/agent/mcp.json would sit inert. It does read AGENTS.md, so it gets
+  // instructions only, and reaches vnodes through the CLI.
+  { id: 'pi', name: 'pi', detect: ['~/.pi'], kind: 'instructions-only', instructions: 'AGENTS.md' },
+  // Prime keeps MCP servers inside its main settings file, and its schema is a
+  // tagged union — an entry without type: "stdio" does not validate.
+  { id: 'prime-agent', name: 'Prime Agent', detect: ['~/.prime'], kind: 'mcp-json', file: '~/.prime/agent/settings.json', serverType: 'stdio', instructions: 'AGENTS.md' },
 ];
 
 function expand(p) { return p.replace(/^~/, os.homedir()); }
@@ -110,14 +118,20 @@ function serverArgs(projectRoot, pinRoot) {
 }
 
 // JSON MCP config: merge only the "vnodes" server key; other keys untouched.
-function upsertMcpJson(filePath, projectRoot, { pinRoot = true } = {}) {
+// serverType emits a discriminant ("stdio") for agents whose schema is a tagged
+// union and rejects an untagged entry; agents without one take the bare shape.
+function upsertMcpJson(filePath, projectRoot, { pinRoot = true, serverType = null } = {}) {
   let obj = {};
   if (fs.existsSync(filePath)) {
     try { obj = JSON.parse(fs.readFileSync(filePath, 'utf8')); }
     catch { return { file: filePath, ok: false, error: 'existing file is not valid JSON — left untouched' }; }
   }
   obj.mcpServers = obj.mcpServers || {};
-  obj.mcpServers.vnodes = { command: 'node', args: serverArgs(projectRoot, pinRoot) };
+  obj.mcpServers.vnodes = {
+    ...(serverType ? { type: serverType } : {}),
+    command: 'node',
+    args: serverArgs(projectRoot, pinRoot),
+  };
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n');
   return { file: filePath, ok: true };
@@ -159,7 +173,7 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
       if (personalMode && inRepo(a.file, projectRoot)) {
         r.skipped = 'personalMode: shared-repo write skipped';
       } else {
-        const w = upsertMcpJson(abs, projectRoot, { pinRoot });
+        const w = upsertMcpJson(abs, projectRoot, { pinRoot, serverType: a.serverType || null });
         r.wrote.push(w.ok ? w.file : `SKIPPED ${w.file}: ${w.error}`);
       }
     } else if (a.kind === 'codex-toml') {
