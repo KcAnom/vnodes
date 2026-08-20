@@ -26,6 +26,14 @@ const AGENTS = [
 
 function expand(p) { return p.replace(/^~/, os.homedir()); }
 
+// True when a config path lives inside the repo. Drives two decisions: whether
+// personalMode should skip the write (shared-repo hygiene), and whether the
+// registration may pin an absolute project root at all.
+function inRepo(p, projectRoot) {
+  const abs = expand(p);
+  return !path.isAbsolute(abs) || abs.startsWith(projectRoot);
+}
+
 function detectAgents() {
   return AGENTS.map(a => ({ ...a, installed: a.detect.some(d => fs.existsSync(expand(d))) }));
 }
@@ -89,29 +97,39 @@ function upsertMarkerBlock(filePath, block) {
   fs.writeFileSync(filePath, next);
 }
 
+// A config that lives outside the repo is shared by every project the agent
+// opens, so pinning one absolute project root there makes the last `vnodes
+// setup` win globally — the agent would then serve that one repo everywhere.
+// Omit the root instead and let the server resolve it upward from its working
+// directory (findProjectRoot falls back to cwd, so this never fails).
+function serverArgs(projectRoot, pinRoot) {
+  return pinRoot ? [BIN, 'mcp', projectRoot] : [BIN, 'mcp'];
+}
+
 // JSON MCP config: merge only the "vnodes" server key; other keys untouched.
-function upsertMcpJson(filePath, projectRoot) {
+function upsertMcpJson(filePath, projectRoot, { pinRoot = true } = {}) {
   let obj = {};
   if (fs.existsSync(filePath)) {
     try { obj = JSON.parse(fs.readFileSync(filePath, 'utf8')); }
     catch { return { file: filePath, ok: false, error: 'existing file is not valid JSON — left untouched' }; }
   }
   obj.mcpServers = obj.mcpServers || {};
-  obj.mcpServers.vnodes = { command: 'node', args: [BIN, 'mcp', projectRoot] };
+  obj.mcpServers.vnodes = { command: 'node', args: serverArgs(projectRoot, pinRoot) };
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n');
   return { file: filePath, ok: true };
 }
 
-function upsertCodexToml(filePath, projectRoot) {
+function upsertCodexToml(filePath, projectRoot, { pinRoot = true } = {}) {
   // Hand-written Codex MCP entries are never overwritten (BR-018): only the
   // vnodes-marked block is managed.
   const B = '# vnodes:begin (generated)', E = '# vnodes:end';
   let existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+  const args = serverArgs(projectRoot, pinRoot).map(a => `"${a}"`).join(', ');
   const block = `${B}
 [mcp_servers.vnodes]
 command = "node"
-args = ["${BIN}", "mcp", "${projectRoot}"]
+args = [${args}]
 ${E}
 `;
   const s = existing.indexOf(B), e = existing.indexOf(E);
@@ -129,26 +147,27 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
   const results = [];
   for (const a of chosen) {
     const r = { agent: a.name, id: a.id, wrote: [] };
-    const inRepo = p => !path.isAbsolute(expand(p)) || expand(p).startsWith(projectRoot);
-    // MCP registration
+    // Pin the project root only in a config that lives inside this repo; a
+    // config outside it is shared across projects and resolves by cwd instead.
+    const pinRoot = a.file ? inRepo(a.file, projectRoot) : true;
     if (a.kind === 'mcp-json') {
       const target = expand(a.file);
       const abs = path.isAbsolute(target) ? target : path.join(projectRoot, target);
-      if (personalMode && inRepo(a.file)) {
+      if (personalMode && inRepo(a.file, projectRoot)) {
         r.skipped = 'personalMode: shared-repo write skipped';
       } else {
-        const w = upsertMcpJson(abs, projectRoot);
+        const w = upsertMcpJson(abs, projectRoot, { pinRoot });
         r.wrote.push(w.ok ? w.file : `SKIPPED ${w.file}: ${w.error}`);
       }
     } else if (a.kind === 'codex-toml') {
-      const w = upsertCodexToml(expand(a.file), projectRoot);
+      const w = upsertCodexToml(expand(a.file), projectRoot, { pinRoot });
       r.wrote.push(w.file);
     }
     // Instructions (instructions-only agents get only this)
     if (a.instructions) {
       const target = expand(a.instructions);
       const abs = path.isAbsolute(target) ? target : path.join(projectRoot, target);
-      if (personalMode && inRepo(a.instructions)) {
+      if (personalMode && inRepo(a.instructions, projectRoot)) {
         r.skipped = 'personalMode: shared-repo write skipped';
       } else {
         upsertMarkerBlock(abs, instructionText(projectRoot));
@@ -160,4 +179,4 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
   return { detected: detected.map(a => ({ id: a.id, name: a.name, installed: a.installed })), configured: results, personalMode };
 }
 
-module.exports = { detectAgents, setupAgents, instructionText, AGENTS };
+module.exports = { detectAgents, setupAgents, instructionText, inRepo, AGENTS };

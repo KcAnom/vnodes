@@ -6,7 +6,7 @@
 // addition — these tests are what make that regression impossible.
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { instructionText } = require('../src/agents');
+const { instructionText, inRepo, AGENTS } = require('../src/agents');
 const { TOOL_DEFS } = require('../src/tools');
 
 test('instruction block names every tool in the live catalog', () => {
@@ -22,6 +22,29 @@ test('instruction block lists nothing that is not a real tool', () => {
   const listed = [...block.matchAll(/^- `([a-z_]+)`/gm)].map(m => m[1]);
   assert.deepStrictEqual(listed.length, TOOL_DEFS.length);
   for (const name of listed) assert.ok(names.has(name), `not a real tool: ${name}`);
+});
+
+// A config file outside the repo is shared by every project the agent opens.
+// Pinning an absolute project root into one made the last `vnodes setup` win
+// globally: Codex ended up serving whichever repo setup last ran in, for every
+// repo. Configs outside the repo must resolve the project by cwd instead.
+test('configs outside the repo are never treated as per-project', () => {
+  const root = '/tmp/some-project';
+  for (const a of AGENTS) {
+    for (const p of [a.file, a.instructions].filter(Boolean)) {
+      const isGlobal = p.startsWith('~');
+      assert.strictEqual(inRepo(p, root), !isGlobal,
+        `${a.id}: ${p} classified wrong (global configs must not pin a root)`);
+    }
+  }
+});
+
+test('every agent with a config outside the repo resolves by cwd', () => {
+  const globals = AGENTS.filter(a => a.file && a.file.startsWith('~'));
+  assert.ok(globals.length > 0, 'expected at least one globally-scoped agent config');
+  for (const a of globals) {
+    assert.strictEqual(inRepo(a.file, '/tmp/some-project'), false, `${a.id} must not pin`);
+  }
 });
 
 test('instruction block is marker-delimited so hand-written prose survives', () => {
