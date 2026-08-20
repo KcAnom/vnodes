@@ -26,17 +26,18 @@ const AGENTS = [
   { id: 'gemini-cli', name: 'Gemini CLI', detect: ['~/.gemini'], kind: 'mcp-json', file: '~/.gemini/settings.json', instructions: 'GEMINI.md' },
   { id: 'cline', name: 'Cline', detect: ['~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev'], kind: 'mcp-json', file: '.cline/mcp.json', instructions: '.clinerules' },
   // pi ships no MCP client by design ("it intentionally does not include
-  // built-in MCP" — pi docs/usage.md), so there is nothing to register: a
-  // ~/.pi/agent/mcp.json would sit inert. It does read AGENTS.md, so it gets
-  // instructions only, and reaches vnodes through the CLI.
+  // built-in MCP" — pi docs/usage.md), so setup has no pi config to manage and
+  // writes AGENTS.md only. The owner keeps a hand-maintained vnodes entry in
+  // ~/.pi/agent/mcp.json alongside repomix; that file is theirs, so leave it be
+  // rather than treating its absence or presence as something setup controls.
   { id: 'pi', name: 'pi', detect: ['~/.pi'], kind: 'instructions-only', instructions: 'AGENTS.md' },
-  // Prime accepts an mcpServers entry and lists it, but cannot connect one over
-  // stdio: its TypeScript manager skips every non-http server ("stdio servers
-  // self-manage in Python") and the Python side implements HTTP only, naming
-  // stdio as an override point no class implements. A registration there shows
-  // up permanently disconnected, so Prime gets instructions only — like pi, it
-  // reaches vnodes through the CLI. Revisit if the daemon ever speaks MCP over
-  // streamable HTTP; `POST /rpc` today is a bespoke shape, not MCP.
+  // Prime Agent 0.7.x auto-wires remote HTTP MCP only: its TypeScript manager
+  // skips every non-http server ("stdio servers self-manage in Python") and the
+  // Python side implements HTTP alone. A stdio mcpServers entry there lists as
+  // permanently disconnected, so setup writes AGENTS.md and no MCP config.
+  // Prime does reach vnodes — through the owner's vnodes-mcp skill, which
+  // bridges to the stdio server from Prime's IPython kernel. That skill is
+  // theirs to maintain; setup neither writes nor validates it.
   { id: 'prime-agent', name: 'Prime Agent', detect: ['~/.prime'], kind: 'instructions-only', instructions: 'AGENTS.md' },
 ];
 
