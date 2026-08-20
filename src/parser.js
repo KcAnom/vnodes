@@ -108,6 +108,35 @@ CODE_PATTERNS.scala = [
   ['function', /^\s*(?:override\s+|private\s+|protected\s+)*def\s+([A-Za-z_]\w*)/],
   ['class', /^\s*(?:case\s+|abstract\s+|sealed\s+)*(?:class|trait|object)\s+([A-Za-z_]\w*)/],
 ];
+// Dart members carry a leading return type and no access keyword, so a bare
+// `Name(` is ambiguous: at method depth it is nearly always a Flutter
+// widget-tree call (`Container(`, `Text(`), not a declaration. Two guards keep
+// build methods from flooding the index — constructors are pinned to
+// class-member indentation (2 spaces, what dartfmt emits), and functions must
+// carry a return-type token, which no call site has. The statement-keyword
+// lookahead then rejects `return Foo(` and friends at any depth.
+CODE_PATTERNS.dart = [
+  ['class', /^\s*(?:abstract\s+|base\s+|final\s+|interface\s+|sealed\s+|mixin\s+)*class\s+([A-Za-z_$][\w$]*)/],
+  ['mixin', /^\s*(?:base\s+)?mixin\s+([A-Za-z_$][\w$]*)/],
+  // `extension on Foo {` is anonymous — the lookahead stops `on` becoming a name.
+  ['extension', /^\s*extension(?:\s+type)?\s+(?!on\b)([A-Za-z_$][\w$]*)/],
+  ['enum', /^\s*enum\s+([A-Za-z_$][\w$]*)/],
+  ['type', /^\s*typedef\s+([A-Za-z_$][\w$]*)/],
+  // Constructors are matched in parseFile, not here — telling a declaration
+  // from a `const Foo(` call in a top-level list needs the enclosing class.
+  ['getter', /^\s*(?:static\s+)?[\w$][\w$<>,[\]?]*(?:\s+[\w$][\w$<>,[\]?]*)*\s+get\s+([A-Za-z_$][\w$]*)/],
+  // Type tokens must start with a word char: `?` is in the class for nullables
+  // (`Widget?`), and without this a ternary `? Foo(x)` reads as a declaration.
+  // `Function` is Dart's function-type keyword, never a declared name.
+  ['function', /^\s*(?!(?:return|await|if|for|while|switch|throw|yield|assert|else|case|new|super|this|final|const|var)\b)(?:@\w+\s+)*(?:static\s+|external\s+)*[\w$][\w$<>,[\]?]*(?:\s+[\w$][\w$<>,[\]?]*)*\s+((?!Function\b)[A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/],
+  // `operator ==(` puts a space and the symbol between the name and the paren,
+  // so the generic `function` pattern above can never reach it. Spelling the
+  // operators out instead of `\S+`, plus the required return-type token, keeps
+  // call sites and expressions out.
+  ['function', /^\s*(?:@\w+\s+)*(?:static\s+|external\s+)*[\w$][\w$<>,[\]?]*\s+operator\s*(==|<=|>=|<<|>>>|>>|<|>|\[\]=|\[\]|[-+*/%~^&|])\s*\(/],
+  // Column-anchored so locals inside function bodies stay out of the skeleton.
+  ['const', /^(?:final|const)\s+(?:[\w$<>,[\]?]+\s+)?([A-Za-z_$][\w$]*)\s*=/],
+];
 
 const IMPORT_PATTERNS = [
   /^\s*import\s+.*?from\s+['"]([^'"]+)['"]/,          // ES modules
@@ -171,7 +200,59 @@ function parseFile(relPath, text) {
   // Go groups most imports in `import ( ... )` blocks whose lines are bare
   // quoted paths (optionally aliased) that no single-line pattern can see.
   let goImportBlock = false;
+  // Dart: name of the innermost top-level class, to validate constructors, and
+  // the delimiter of the multi-line string currently open, if any.
+  let dartClass = null;
+  let dartStr = null;
   lines.forEach((l, i) => {
+    // A Dart constructor shares its class's name, and that is the only thing
+    // separating `  const Foo(` as a declaration from the same line as a call
+    // inside a top-level `const [...]` literal. Track the enclosing class and
+    // require the match to name it.
+    if (lang === 'dart') {
+      // A codegen toolchain stores Dart source as data — templates live in raw
+      // strings, so their bodies arrive here as ordinary-looking lines. Without
+      // this, a template's `import` becomes a real edge and its classes become
+      // real nodes. Only ''' and """ span lines, so tracking those two is enough.
+      if (dartStr) { if (l.includes(dartStr)) dartStr = null; return; }
+      const open = l.match(/(?:^|[^'"])(?:r)?('''|""")/);
+      // An odd count leaves the delimiter open at EOL; an even count is a
+      // complete single-line string. The opening line still falls through, so
+      // `const String tpl = r'''` is captured as a const.
+      if (open && (l.split(open[1]).length - 1) % 2 === 1) dartStr = open[1];
+      // A configurable import names its alternatives in `if (dart.library.x)`
+      // clauses, which may sit on continuation lines that no `^import` anchor
+      // can see. Dropping them hides the variant that actually compiles on a
+      // given platform — sometimes the only one that ever ships. Anchor on
+      // `dart.library.` specifically: a looser `if (...) '...'` also matches
+      // collection-if entries in map literals. Deliberately not returning, as
+      // one directive can carry several clauses alongside its default URI.
+      for (const c of l.matchAll(/\bif\s*\(\s*dart\.library\.[\w.]+\s*\)\s*['"]([^'"]+)['"]/g))
+        imports.push(c[1]);
+      // Barrel files wire packages together with `export`, and codegen splices
+      // `.g.dart` in with `part` — both are real file dependencies that look
+      // nothing like an import to the generic patterns. `part of` is skipped on
+      // purpose: it restates the parent's `part` from the other side, so
+      // capturing it would fabricate a reverse edge and put every generated
+      // file in a 2-cycle with its source. The parent→part edge already answers
+      // "who depends on this .g.dart", since impact walks edges backwards.
+      const wire = l.match(/^\s*(?:export|part)\s+['"]([^'"]+)['"]/);
+      if (wire) { imports.push(wire[1]); return; }
+      const decl = l.match(/^(?:abstract\s+|base\s+|final\s+|interface\s+|sealed\s+|mixin\s+)*(?:class|mixin|extension|enum)\s+(?:type\s+)?(?!on\b)([A-Za-z_$][\w$]*)/);
+      if (decl) dartClass = decl[1];
+      else if (/^\}/.test(l)) dartClass = null; // column-0 brace closes the body
+      else if (dartClass) {
+        // Requiring the name to equal the enclosing class is what separates a
+        // declaration from a `const Foo(` call, so the name class carries no
+        // weight here: `_Foo` (the dominant private-widget idiom) and `$Foo`
+        // (freezed / json_serializable output) declare constructors too.
+        const c = l.match(/^ {2}(?:const\s+|factory\s+|external\s+)?([A-Za-z_$][\w$]*)((?:\.[A-Za-z_$][\w$]*)?)\s*\(/);
+        if (c && c[1] === dartClass) {
+          nodes.push({ name: c[1] + c[2], kind: 'constructor', line: i + 1, signature: l.trim().slice(0, 200) });
+          return;
+        }
+      }
+    }
     if (lang === 'go') {
       if (goImportBlock) {
         if (/^\s*\)/.test(l)) { goImportBlock = false; return; }

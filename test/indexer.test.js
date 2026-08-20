@@ -21,13 +21,65 @@ function fixture(files) {
   return root;
 }
 
-function edgesOf(root) {
-  runIndex(root, loadConfig(root));
+function readEdges(root) {
   const db = openStore(engineDir(root));
   const rows = db.prepare('SELECT src_file, dst_file FROM edges ORDER BY src_file, dst_file').all();
   db.close();
   return rows.map(r => `${r.src_file} -> ${r.dst_file}`);
 }
+
+function edgesOf(root) {
+  runIndex(root, loadConfig(root));
+  return readEdges(root);
+}
+
+test('incremental: the edge set always equals a cold rebuild', () => {
+  // Whether an import resolves depends on the whole file set, not on the
+  // importing file's bytes, so a file that never changes still has to be
+  // re-resolved when its targets appear, vanish or come back. Skipping it on a
+  // content hash loses edges permanently and silently — impact then answers
+  // found:true, dependents:0 for a file that genuinely has dependents.
+  const base = {
+    'src/a.ts': "import './b';\nimport './c';\nexport const a = 1;\n",
+    'src/b.ts': 'export const b = 1;\n',
+  };
+  const withC = { ...base, 'src/c.ts': 'export const c = 1;\n' };
+  const root = fixture(base);
+  const cold = tree => edgesOf(fixture(tree));
+  const warm = () => { runIndex(root, loadConfig(root)); return readEdges(root); };
+  const cPath = path.join(root, 'src/c.ts');
+
+  assert.deepStrictEqual(warm(), cold(base));
+
+  // a.ts is byte-identical through every step below.
+  fs.writeFileSync(cPath, withC['src/c.ts']);
+  assert.deepStrictEqual(warm(), cold(withC), 'a target that appeared never reached its importer');
+
+  fs.unlinkSync(cPath);
+  assert.deepStrictEqual(warm(), cold(base), 'a removed target left a stale edge');
+
+  fs.writeFileSync(cPath, withC['src/c.ts']);
+  assert.deepStrictEqual(warm(), cold(withC), 'the edge never came back');
+});
+
+test('workspace: aliased edges are rebuilt, not lost, on an incremental run', () => {
+  // Edges are cleared per repo and re-derived every run, and in a workspace
+  // both sides of that are alias-prefixed. Nothing else covers multi-repo.
+  const root = fixture({
+    'main/src/app.ts': "import './util';\nexport const app = 1;\n",
+    'main/src/util.ts': 'export const util = 1;\n',
+    'lib/src/helper.ts': "import './shared';\nexport const helper = 1;\n",
+    'lib/src/shared.ts': 'export const shared = 1;\n',
+    'main/.vnodes/workspace.json': JSON.stringify({
+      name: 'ws', primary_alias: 'main', repos: [{ alias: 'lib', path: '../lib' }],
+    }),
+  });
+  const primary = path.join(root, 'main');
+  const first = edgesOf(primary);
+  assert.ok(first.includes('main/src/app.ts -> main/src/util.ts'), 'primary repo edge missing');
+  assert.ok(first.includes('lib/src/helper.ts -> lib/src/shared.ts'), 'secondary repo edge missing');
+  assert.deepStrictEqual(edgesOf(primary), first, 'an incremental run dropped aliased edges');
+});
 
 test('js/ts: relative imports and tsconfig aliases', () => {
   const root = fixture({
@@ -62,6 +114,56 @@ test('rust: crate::, mod declarations, grouped use', () => {
   assert.ok(edges.includes('src/main.rs -> src/ui/panel.rs'));
   assert.ok(edges.includes('src/main.rs -> src/ui/style.rs'));
   assert.ok(edges.includes('src/ui/mod.rs -> src/ui/panel.rs'));
+});
+
+test('dart: package: URIs via pubspec names, relative, export, part', () => {
+  const root = fixture({
+    'packages/app/pubspec.yaml': 'name: app\nenvironment:\n  sdk: ">=3.0.0"\n',
+    'packages/core/pubspec.yaml': "name: core\n",
+    'packages/app/lib/app.dart': [
+      "import 'dart:async';",
+      "import 'package:core/core.dart';",
+      "import 'package:flutter/material.dart';",
+      "import 'src/screen.dart';",
+      "export 'src/screen.dart';",
+      'class App {}',
+    ].join('\n'),
+    'packages/app/lib/src/screen.dart': "part 'screen.g.dart';\nclass Screen {}\n",
+    'packages/app/lib/src/screen.g.dart': "part of 'screen.dart';\n",
+    'packages/core/lib/core.dart': 'class Core {}\n',
+  });
+  const edges = edgesOf(root);
+  assert.ok(edges.includes('packages/app/lib/app.dart -> packages/core/lib/core.dart'),
+    'package: URI did not resolve through the pubspec name');
+  assert.ok(edges.includes('packages/app/lib/app.dart -> packages/app/lib/src/screen.dart'),
+    'bare relative import did not resolve');
+  assert.ok(edges.includes('packages/app/lib/src/screen.dart -> packages/app/lib/src/screen.g.dart'),
+    'part directive did not resolve');
+  // `part of` restates the parent's `part`; emitting it too would put every
+  // generated file in a 2-cycle with its source for no added reachability.
+  assert.ok(!edges.includes('packages/app/lib/src/screen.g.dart -> packages/app/lib/src/screen.dart'),
+    'part-of fabricated a reverse edge');
+  // dart: is the SDK and flutter is not in this tree — neither is a graph node.
+  assert.ok(!edges.some(e => e.includes('async') || e.includes('material')),
+    'external or SDK import fabricated an edge');
+});
+
+test('dart: a root pubspec outranks a nested one with the same name', () => {
+  // Vendored copies duplicate a package name, and the shallowest pubspec is
+  // documented to win. The root's dir is '', whose segment count is 1 — the
+  // same as 'app' — so a naive comparison ties and lets walk order decide.
+  const root = fixture({
+    'pubspec.yaml': 'name: shared\n',
+    'lib/one.dart': 'class One {}\n',
+    'app/pubspec.yaml': 'name: shared\n',
+    'app/lib/one.dart': 'class AppOne {}\n',
+    'app/lib/main.dart': "import 'package:shared/one.dart';\nclass Main {}\n",
+  });
+  const edges = edgesOf(root);
+  assert.ok(edges.includes('app/lib/main.dart -> lib/one.dart'),
+    'package: URI resolved to the nested pubspec; the root one is shallower');
+  assert.ok(!edges.includes('app/lib/main.dart -> app/lib/one.dart'),
+    'resolution depended on walk order');
 });
 
 test('go: go.mod module paths anchor on <dir>/<dirname>.go', () => {

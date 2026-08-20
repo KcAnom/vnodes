@@ -23,6 +23,13 @@ function openStore(engDir) {
       PRIMARY KEY (src_file, dst_file, kind)
     );
     CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_file);
+    -- Raw, unresolved import specifiers as written in the source. Edges are
+    -- derived from these every run: whether a spec resolves depends on the
+    -- whole file set, so it cannot be cached per file the way parse output can.
+    CREATE TABLE IF NOT EXISTS imports (
+      file TEXT, repo TEXT DEFAULT '', spec TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_imports_file ON imports(file);
     CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
   `);
   return db;
