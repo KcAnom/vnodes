@@ -81,19 +81,6 @@ test('registration omits the project root when it must resolve by cwd', () => {
   assert.ok(!args.includes('/tmp/proj'), 'a cwd-resolving registration must not name a project');
 });
 
-// Prime's schema is a tagged union: an stdio entry without type: "stdio" does
-// not validate. Agents that accept the bare shape must not gain a stray field.
-test('serverType is emitted only for agents whose schema demands it', () => {
-  const typed = tmpJson('{}');
-  upsertMcpJson(typed, '/tmp/proj', { pinRoot: false, serverType: 'stdio' });
-  assert.strictEqual(JSON.parse(fs.readFileSync(typed, 'utf8')).mcpServers.vnodes.type, 'stdio');
-
-  const bare = tmpJson('{}');
-  upsertMcpJson(bare, '/tmp/proj', { pinRoot: false });
-  assert.ok(!('type' in JSON.parse(fs.readFileSync(bare, 'utf8')).mcpServers.vnodes),
-    'agents that take the bare shape must not gain a type field');
-});
-
 test('a config that is not valid JSON is reported, never overwritten', () => {
   const file = tmpJson('{ this is not json');
   const r = upsertMcpJson(file, '/tmp/proj');

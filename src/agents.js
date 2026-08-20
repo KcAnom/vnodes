@@ -30,9 +30,14 @@ const AGENTS = [
   // ~/.pi/agent/mcp.json would sit inert. It does read AGENTS.md, so it gets
   // instructions only, and reaches vnodes through the CLI.
   { id: 'pi', name: 'pi', detect: ['~/.pi'], kind: 'instructions-only', instructions: 'AGENTS.md' },
-  // Prime keeps MCP servers inside its main settings file, and its schema is a
-  // tagged union — an entry without type: "stdio" does not validate.
-  { id: 'prime-agent', name: 'Prime Agent', detect: ['~/.prime'], kind: 'mcp-json', file: '~/.prime/agent/settings.json', serverType: 'stdio', instructions: 'AGENTS.md' },
+  // Prime accepts an mcpServers entry and lists it, but cannot connect one over
+  // stdio: its TypeScript manager skips every non-http server ("stdio servers
+  // self-manage in Python") and the Python side implements HTTP only, naming
+  // stdio as an override point no class implements. A registration there shows
+  // up permanently disconnected, so Prime gets instructions only — like pi, it
+  // reaches vnodes through the CLI. Revisit if the daemon ever speaks MCP over
+  // streamable HTTP; `POST /rpc` today is a bespoke shape, not MCP.
+  { id: 'prime-agent', name: 'Prime Agent', detect: ['~/.prime'], kind: 'instructions-only', instructions: 'AGENTS.md' },
 ];
 
 function expand(p) { return p.replace(/^~/, os.homedir()); }
@@ -118,20 +123,14 @@ function serverArgs(projectRoot, pinRoot) {
 }
 
 // JSON MCP config: merge only the "vnodes" server key; other keys untouched.
-// serverType emits a discriminant ("stdio") for agents whose schema is a tagged
-// union and rejects an untagged entry; agents without one take the bare shape.
-function upsertMcpJson(filePath, projectRoot, { pinRoot = true, serverType = null } = {}) {
+function upsertMcpJson(filePath, projectRoot, { pinRoot = true } = {}) {
   let obj = {};
   if (fs.existsSync(filePath)) {
     try { obj = JSON.parse(fs.readFileSync(filePath, 'utf8')); }
     catch { return { file: filePath, ok: false, error: 'existing file is not valid JSON — left untouched' }; }
   }
   obj.mcpServers = obj.mcpServers || {};
-  obj.mcpServers.vnodes = {
-    ...(serverType ? { type: serverType } : {}),
-    command: 'node',
-    args: serverArgs(projectRoot, pinRoot),
-  };
+  obj.mcpServers.vnodes = { command: 'node', args: serverArgs(projectRoot, pinRoot) };
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(obj, null, 2) + '\n');
   return { file: filePath, ok: true };
@@ -173,7 +172,7 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
       if (personalMode && inRepo(a.file, projectRoot)) {
         r.skipped = 'personalMode: shared-repo write skipped';
       } else {
-        const w = upsertMcpJson(abs, projectRoot, { pinRoot, serverType: a.serverType || null });
+        const w = upsertMcpJson(abs, projectRoot, { pinRoot });
         r.wrote.push(w.ok ? w.file : `SKIPPED ${w.file}: ${w.error}`);
       }
     } else if (a.kind === 'codex-toml') {
