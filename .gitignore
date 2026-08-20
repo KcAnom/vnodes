@@ -4,10 +4,14 @@ node_modules/
 *.log
 .DS_Store
 
-# Per-machine agent configs. `vnodes setup` regenerates these and bakes an
-# absolute path into them, so they are local-only. Claude Code reaches vnodes
-# through the user-scope registration in ~/.claude.json instead.
+# Per-machine agent configs. Every in-repo config `vnodes setup` writes names
+# an absolute project root, so none of them are portable: they are regenerated
+# per machine by re-running setup, never committed. Keep this list in step with
+# the in-repo entries in src/agents.js.
 .mcp.json
 .cursor/
-.gemini/
+.cline/
 .claude/settings.local.json
+# Not written by setup any more (Gemini registers at user scope), but Gemini
+# itself still creates this for workspace state.
+.gemini/

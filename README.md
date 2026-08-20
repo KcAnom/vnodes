@@ -78,9 +78,10 @@ vnodes setup          # wire your installed agents to the MCP server
 vnodes doctor
 ```
 
-`vnodes setup` is not optional on a fresh clone: the per-agent configs it
-writes (`.mcp.json`, `.cursor/`, `.gemini/`) bake in an absolute path, so they
-are gitignored and no clone carries them.
+`vnodes setup` is not optional on a fresh clone: every in-repo config it writes
+(`.mcp.json`, `.cursor/`, `.cline/`) names an absolute project root, so all of
+them are gitignored and no clone carries them. The home-directory registrations
+it writes for Codex, Gemini and Windsurf are per machine for the same reason.
 
 Claude Code users may prefer driving all of this through a `/vnodes` operator
 skill. One is not shipped here — it would have to hardcode this machine's
