@@ -368,3 +368,44 @@ test('a skeleton still outranks an unrelated file', () => {
   const slice = subgraph(eng(root), { prefer: ['src/quiet.ts'], depth: 1, maxNodes: 1 });
   assert.deepStrictEqual(paths(slice), ['src/quiet.ts'], 'preferred beats degree');
 });
+
+// -------------------------------------------------------- the served bundle
+
+test('the shell page loads the committed bundle', () => {
+  const { renderShell, bundleReady } = require('../src/view/shell');
+  assert.strictEqual(bundleReady(), true, 'src/view/static/map.js is committed — build ui/ if this fails');
+  const html = renderShell();
+  assert.match(html, /<link rel="stylesheet" href="\/ui\/static\/map\.css">/);
+  assert.match(html, /<script type="module" src="\/ui\/static\/map\.js"><\/script>/);
+  assert.match(html, /<div id="root"><\/div>/);
+  assert.ok(!/https?:\/\/(?!127\.0\.0\.1)/.test(html), 'the page reaches no host but this one');
+});
+
+test('static serving refuses anything outside the bundle directory', () => {
+  const { readAsset } = require('../src/view/shell');
+  for (const attempt of [
+    '../../package.json',
+    '../data.js',
+    '/etc/passwd',
+    '..%2f..%2fpackage.json',
+    '....//package.json',
+  ]) {
+    assert.strictEqual(readAsset(attempt), null, `traversal not refused: ${attempt}`);
+  }
+});
+
+test('static serving refuses file types a build does not emit', () => {
+  const { readAsset } = require('../src/view/shell');
+  assert.strictEqual(readAsset('map.json'), null);
+  assert.strictEqual(readAsset('map'), null);
+  assert.strictEqual(readAsset(''), null);
+});
+
+test('the bundle is served with the type a browser needs to run it', () => {
+  const { readAsset } = require('../src/view/shell');
+  const js = readAsset('map.js');
+  assert.ok(js, 'map.js must be committed');
+  assert.strictEqual(js.type, 'text/javascript; charset=utf-8');
+  assert.ok(js.body.length > 0);
+  assert.strictEqual(readAsset('map.css').type, 'text/css; charset=utf-8');
+});

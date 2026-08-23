@@ -7,7 +7,11 @@ every feature unconditional. That contract is where the `BR-###` / `ERR-###`
 codes in the source point, and where `config/defaults.json` was snapshotted
 from; it is not distributed with this repo.
 
-Zero dependencies — Node 22+ only (`node:sqlite` for the graph store).
+Zero runtime dependencies — Node 22+ only (`node:sqlite` for the graph store).
+Nothing to install and nothing to build to use it. The one exception is the
+dependency map's browser bundle, which is built from `ui/` and **committed** to
+`src/view/static/`; only a contributor changing the map ever runs that
+toolchain. It still reaches no network — the daemon serves it off disk.
 
 ## What it does
 
@@ -57,16 +61,21 @@ Zero dependencies — Node 22+ only (`node:sqlite` for the graph store).
   daemon/index logs, read-only `vnodes doctor` that works with the daemon down.
 - **Status UI (M9)** — `vnodes ui` on the daemon port; `/ui/theme.css` is the
   design-system insertion seam (deliberately unstyled).
-- **Dependency map (M9)** — `vnodes map [target]` at `/ui/map`: live SVG graph
-  of the indexed files, laid out left-to-right in dependency order. Import
-  cycles render red, isolated files dashed, click a node for its skeleton and
-  both edge directions. A `--task` scopes it to a real context capsule — pivots
-  lit, skeletons amber, everything else dimmed, so you see what an agent would
-  actually be handed. Frames push over SSE when the index changes. Trimming to
-  `ui.map_max_nodes` is always stated on the page, never silent. The canvas
-  fits itself to the viewport on load and after that it is yours — drag to pan,
-  ⌘/ctrl+wheel or `+`/`-`/`0` to zoom, `compact` for smaller boxes on dense
-  graphs — and a live update never moves what you are looking at.
+- **Dependency map (M9)** — `vnodes map [target]` at `/ui/map`: a React Flow
+  canvas over the indexed files, laid out left-to-right in dependency order.
+  Import cycles render red, isolated files dashed, click a node for its
+  skeleton and both edge directions. A `--task` scopes it to a real context
+  capsule — pivots lit, skeletons amber, everything else dimmed, so you see
+  what an agent would actually be handed. Frames push over SSE when the index
+  changes. Trimming to `ui.map_max_nodes` is always stated on the page, never
+  silent, and the capsule's own files are the last to be trimmed. Pan, zoom,
+  minimap, and a path filter that dims rather than hides — a file you filtered
+  out is still where it was.
+
+  Layout is computed server-side by the same code the CLI uses, so the picture
+  and `vnodes impact` cannot disagree; the page draws what it is handed and
+  writes nothing. `/ui/map/data` returns that payload as JSON for anything that
+  is not a browser.
 
 ## Quick start
 

@@ -1,0 +1,8 @@
+# Indexed-but-not-source. These are committed on purpose and still have no place
+# in a dependency map: the map would draw its own bundle as a file of the
+# project, and a lockfile as a node with one symbol.
+#
+# Not .gitignore, because these are tracked — the built map ships with the repo
+# so nobody needs a toolchain to use vnodes.
+src/view/static/
+ui/package-lock.json

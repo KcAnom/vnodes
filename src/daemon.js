@@ -89,10 +89,24 @@ function serve(projectRoot) {
       const url = new URL(req.url, `http://127.0.0.1:${port}`);
       const q = Object.fromEntries(url.searchParams);
       if (url.pathname === '/ui/theme.css') return send(200, uiThemeCss(), 'text/css');
+      if (url.pathname.startsWith('/ui/static/')) {
+        const { readAsset } = require('./view/shell');
+        const asset = readAsset(url.pathname.slice('/ui/static/'.length));
+        if (!asset) return send(404, { error: 'no such asset', asset: url.pathname });
+        // The bundle is content-addressed by the commit it ships in, not by a
+        // hash in its name, so it must not be cached across a rebuild.
+        res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'no-cache' });
+        return res.end(asset.body);
+      }
       if (url.pathname === '/ui/map') {
+        const { renderShell } = require('./view/shell');
+        return send(200, renderShell(), 'text/html');
+      }
+      // The payload the page draws. Also the honest answer to "what does the map
+      // know" for anything that is not a browser.
+      if (url.pathname === '/ui/map/data') {
         const { mapView } = require('./view');
-        const { renderPage } = require('./view/page');
-        return send(200, renderPage(mapView(projectRoot, engineDir(projectRoot), cfg, q), q), 'text/html');
+        return send(200, mapView(projectRoot, engineDir(projectRoot), cfg, q));
       }
       if (url.pathname === '/ui/map/events') return mapEvents(req, res, projectRoot, cfg, q);
       if (url.pathname === '/ui/map/node') {
@@ -117,7 +131,7 @@ function serve(projectRoot) {
       });
       return;
     }
-    send(404, { error: 'not found', endpoints: ['/status', '/tools', '/rpc', '/ui', '/ui/map'] });
+    send(404, { error: 'not found', endpoints: ['/status', '/tools', '/rpc', '/ui', '/ui/map', '/ui/map/data'] });
   });
   server.on('error', e => {
     if (e.code === 'EADDRINUSE') {
@@ -265,7 +279,6 @@ async function doctor(projectRoot) {
  */
 function mapEvents(req, res, projectRoot, cfg, query) {
   const { mapView } = require('./view');
-  const { sseFrame } = require('./view/page');
   const { indexStamp } = require('./view/data');
   const engDir = engineDir(projectRoot);
   const everyMs = ((cfg.ui && cfg.ui.map_refresh_s) || 3) * 1000;
@@ -282,7 +295,9 @@ function mapEvents(req, res, projectRoot, cfg, query) {
     try { next = indexStamp(engDir); } catch { return; }
     if (next === stamp) { res.write(': keepalive\n\n'); return; }
     stamp = next;
-    try { res.write(sseFrame(mapView(projectRoot, engDir, cfg, query), query)); }
+    // The same payload /ui/map/data returns. One shape, so a live frame and a
+    // fresh load cannot drift into rendering differently.
+    try { res.write(`data: ${JSON.stringify(mapView(projectRoot, engDir, cfg, query))}\n\n`); }
     catch (e) { log(projectRoot, 'daemon', `map frame failed: ${e.message}`); }
   }, everyMs);
   timer.unref?.();

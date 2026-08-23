@@ -1,0 +1,203 @@
+/*
+ * Adapted from nodekit's `src/kit/theme/kit.css`.
+ *
+ * The token names and the React Flow overrides are the kit's. What changed is
+ * what the palette is for: nodekit is a canvas where generated images are the
+ * content, so dark is its home and the accent marks connectors. Here the
+ * content is a codebase's shape, the map is read beside an editor in whatever
+ * theme that editor uses, and the accent marks the capsule — the files an agent
+ * is about to be handed.
+ *
+ * So `system` is resolved by a media query rather than in JS (there is no theme
+ * store to hold a preference, and the map is a page rather than an embedded
+ * component), and the marks below are the map's own.
+ */
+@import 'tailwindcss';
+@import '@xyflow/react/dist/style.css';
+
+@layer base {
+  :root {
+    color-scheme: light;
+
+    --background: #f4f4f6;
+    --foreground: #17171a;
+
+    --rail: #ffffff;
+    --panel: #ffffff;
+    --panel-hover: #eeeef1;
+    --card: #fafafa;
+
+    --border: #e3e3e8;
+    --border-strong: #c8c8d0;
+    --border-active: rgb(0 0 0 / 0.22);
+
+    --muted-foreground: #6b6b73;
+    /* One accent, and it means one thing: this file is in the capsule. */
+    --accent: #d1521d;
+    --accent-dim: #b0461a;
+
+    --edge: #c8c8d0;
+    --edge-strong: #6b6b73;
+    --dots: #cfcfd6;
+    --overlay: rgb(0 0 0 / 0.35);
+    --selection-foreground: #fff;
+
+    --radius: 10px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      color-scheme: dark;
+
+      --background: #08080a;
+      --foreground: #ededef;
+
+      --rail: #0e0e11;
+      --panel: #1a1a1d;
+      --panel-hover: #232327;
+      --card: #141417;
+
+      --border: #2a2a2f;
+      --border-strong: #3a3a41;
+      --border-active: rgb(255 255 255 / 0.2);
+
+      --muted-foreground: #86868d;
+      --accent: #df5c25;
+      --accent-dim: #8a3a17;
+
+      --edge: #33333a;
+      --edge-strong: #86868d;
+      --dots: #33333a;
+      --overlay: rgb(0 0 0 / 0.7);
+    }
+  }
+
+  [data-theme='dark'] {
+    color-scheme: dark;
+
+    --background: #08080a;
+    --foreground: #ededef;
+
+    --rail: #0e0e11;
+    --panel: #1a1a1d;
+    --panel-hover: #232327;
+    --card: #141417;
+
+    --border: #2a2a2f;
+    --border-strong: #3a3a41;
+    --border-active: rgb(255 255 255 / 0.2);
+
+    --muted-foreground: #86868d;
+    --accent: #df5c25;
+    --accent-dim: #8a3a17;
+
+    --edge: #33333a;
+    --edge-strong: #86868d;
+    --dots: #33333a;
+    --overlay: rgb(0 0 0 / 0.7);
+  }
+
+  [data-theme='light'] {
+    color-scheme: light;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-rail: var(--rail);
+  --color-panel: var(--panel);
+  --color-panel-hover: var(--panel-hover);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-border-active: var(--border-active);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-dim: var(--accent-dim);
+  --color-overlay: var(--overlay);
+
+  --radius-base: var(--radius);
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: var(--accent-dim);
+    color: var(--selection-foreground);
+  }
+}
+
+@layer components {
+  /* Surfaces floating above the canvas. Flat: separation is border and fill. */
+  .surface {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+}
+
+/* React Flow ships a light theme by default; these follow the tokens instead. */
+.react-flow {
+  --xy-background-color: var(--background);
+  --xy-edge-stroke-default: var(--edge);
+  --xy-edge-stroke-selected-default: var(--edge-strong);
+}
+
+.react-flow__node {
+  cursor: default;
+}
+
+.react-flow__pane {
+  cursor: grab;
+}
+
+.react-flow__pane.dragging {
+  cursor: grabbing;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+/* An edge inside an import cycle. The one other place red is used. */
+.react-flow__edge.cycle .react-flow__edge-path {
+  stroke: color-mix(in oklab, red 55%, var(--edge-strong));
+}
+
+/* An edge touching the capsule, so the overlay reads as a subgraph. */
+.react-flow__edge.lit .react-flow__edge-path {
+  stroke: var(--accent);
+}
+
+.react-flow__edge.dimmed .react-flow__edge-path {
+  opacity: 0.15;
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
