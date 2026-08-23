@@ -135,3 +135,11 @@ install path — so keep it at user scope in `~/.claude/skills/vnodes/`.
   everything works with the layer off.
 - macOS binary signing (ERR-004) and marketplace platform packaging (ERR-012)
   don't apply — this is plain Node source, no binaries.
+- BR-002's "no explicit init step" is now qualified: a project indexes on first
+  use once it has a `.vnodes/`, and a directory without one is refused with the
+  command that would create it. BR-002 assumed the project was the one the
+  owner chose, but a registration written outside a repo carries no project
+  root by design, so it resolves upward from the agent's working directory —
+  and one tool call was enough to build a knowledge base in a repo nobody
+  nominated. `vnodes index` is the opt-in; nothing that runs unasked creates
+  one.

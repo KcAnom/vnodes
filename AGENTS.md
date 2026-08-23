@@ -13,6 +13,7 @@ MCP tools over raw file exploration:
 - `search_memory` — recall findings from previous sessions.
 - `save_observation` — record a durable insight (link a file for staleness tracking).
 - `index_status` — index health when a result looks stale or wrong.
+- `create_knowledge_base` — Make this directory (or `path`) a vnodes knowledge base and index it.
 - `workspace_setup` — Define a multi-repo workspace ({name|workspace_id, repos:[{alias,path}]}) and write parent pointers into secondary repos.
 
 Avoid re-sending full context every turn; one pipeline orientation call per
