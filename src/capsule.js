@@ -14,14 +14,38 @@ const PRESETS = ['auto', 'explore', 'debug', 'modify', 'refactor'];
 
 function estimateTokens(text) { return Math.ceil(text.length / 4); }
 
-function resolveIntent(task, preset, projectRoot = null) {
-  if (preset && preset !== 'auto' && PRESETS.includes(preset)) return preset;
+const INTENT_RULES = [
+  ['debug', /\b(bug|fix|error|fail|crash|broken|why|regress|exception|stack ?trace)\b/],
+  ['refactor', /\b(refactor|clean ?up|restructure|rename|extract|simplify)\b/],
+  ['modify', /\b(add|implement|create|build|new|change|update|modify|support)\b/],
+  ['explore', /\b(how|what|where|understand|explain|explore|overview|architecture)\b/],
+];
+
+/**
+ * Intent and where it came from, decided together.
+ *
+ * "Why did it pick debug" was unanswerable from outside the function: the
+ * caller got a word with no provenance, so a preset the user chose, a regex
+ * that fired on the word "why", an LLM guess and the do-nothing fallback all
+ * looked identical. They are not equally trustworthy and the UI has to say
+ * which one it was. Classification stays in one place so the LLM is consulted
+ * at most once per capsule.
+ */
+function classifyIntent(task, preset, projectRoot = null) {
+  if (preset && preset !== 'auto' && PRESETS.includes(preset)) return { intent: preset, source: 'preset' };
   const t = (task || '').toLowerCase();
-  if (/\b(bug|fix|error|fail|crash|broken|why|regress|exception|stack ?trace)\b/.test(t)) return 'debug';
-  if (/\b(refactor|clean ?up|restructure|rename|extract|simplify)\b/.test(t)) return 'refactor';
-  if (/\b(add|implement|create|build|new|change|update|modify|support)\b/.test(t)) return 'modify';
-  if (/\b(how|what|where|understand|explain|explore|overview|architecture)\b/.test(t)) return 'explore';
-  return llmIntent(task, projectRoot) || 'auto';
+  for (const [intent, re] of INTENT_RULES) if (re.test(t)) return { intent, source: 'regex' };
+  const guess = llmIntent(task, projectRoot);
+  return guess ? { intent: guess, source: 'llm' } : { intent: 'auto', source: 'default' };
+}
+
+function resolveIntent(task, preset, projectRoot = null) {
+  return classifyIntent(task, preset, projectRoot).intent;
+}
+
+/** 'preset' | 'regex' | 'llm' | 'default' — the provenance of resolveIntent's answer. */
+function intentSource(task, preset, projectRoot = null) {
+  return classifyIntent(task, preset, projectRoot).source;
 }
 
 // LLM-assisted intent refinement (BR-022: rule-based must work with this off).
@@ -91,7 +115,7 @@ function tryRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return 
 function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repos, pivots: pivotCount = 2, session } = {}) {
   const db = openStore(engDir);
   const budget = max_tokens || cfg.capsule.max_tokens;
-  const intent = resolveIntent(task, preset, projectRoot);
+  const { intent, source: intentReason } = classifyIntent(task, preset, projectRoot);
   const ranked = rankFiles(db, task, intent, repos);
   // Pivots carry full file content, so a giant test file with thousands of
   // symbol hits can out-score the real implementation on raw term volume.
@@ -110,7 +134,11 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     .slice(0, 30);
 
   let used = 0;
-  const capsule = { intent, budget_tokens: budget, pivots: [], skeletons: [], memories: [], truncated: false };
+  // `omitted` is the receipt for BR-008's budget cut. The loops below used to
+  // just `break`, which meant the capsule was silently smaller than the ranking
+  // said it should be and no reader could tell a file that scored zero from one
+  // that scored well and lost to the last 200 tokens.
+  const capsule = { intent, intent_reason: intentReason, budget_tokens: budget, pivots: [], skeletons: [], memories: [], truncated: false, omitted: [] };
 
   const pivotBudget = Math.floor(budget * 0.7);
   for (const p of pivotFiles) {
@@ -121,6 +149,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
       if (capsule.pivots.length > 0) {
         // Pivot doesn't fit: degrade to skeleton rather than blow the budget.
         supporters.unshift(p);
+        capsule.omitted.push({ file: p.path, est_tokens: tok, reason: 'pivot-degraded-to-skeleton' });
         continue;
       }
       // First pivot alone exceeds the budget: clip it to fit. A capsule with no
@@ -140,11 +169,23 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     used += tok;
   }
   const detail = cfg.capsule.skeleton_detail || 'standard';
-  for (const s of supporters) {
+  for (let i = 0; i < supporters.length; i++) {
+    const s = supporters[i];
     const sk = buildSkeleton(db, s.path, detail);
     if (!sk) continue;
     const tok = estimateTokens(sk);
-    if (used + tok > budget) { capsule.truncated = true; break; }
+    if (used + tok > budget) {
+      capsule.truncated = true;
+      // Everything from here down ranked in and lost to the budget. Name all of
+      // it, not just the file that happened to be at the head of the queue when
+      // the budget ran out.
+      for (let j = i; j < supporters.length; j++) {
+        const rest = j === i ? sk : buildSkeleton(db, supporters[j].path, detail);
+        if (!rest) continue;
+        capsule.omitted.push({ file: supporters[j].path, est_tokens: estimateTokens(rest), reason: 'budget' });
+      }
+      break;
+    }
     capsule.skeletons.push({ file: s.path, tokens: tok, detail, content: sk });
     used += tok;
   }
@@ -174,4 +215,4 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   return capsule;
 }
 
-module.exports = { buildCapsule, resolveIntent, estimateTokens, PRESETS };
+module.exports = { buildCapsule, resolveIntent, intentSource, estimateTokens, PRESETS };

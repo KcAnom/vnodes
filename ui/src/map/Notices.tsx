@@ -8,11 +8,26 @@
  * separately, next to the control that reverses it. Folding them together would
  * make each remedy wrong for two thirds of what it claimed to explain.
  */
+import { useEffect, useRef } from 'react'
 import { AlertTriangle, EyeOff, FolderTree, Layers, RefreshCw } from 'lucide-react'
 import { queryString } from './api'
 import type { MapPayload, MapQuery } from './types'
 
-export function Notices({ payload, query }: { payload: MapPayload; query: MapQuery }) {
+export function Notices({
+  payload,
+  query,
+  onHeight,
+}: {
+  payload: MapPayload
+  query: MapQuery
+  /**
+   * What this stack currently measures. Same argument the toolbar's own
+   * `onHeight` comment makes, and the same shape: this thing floats over the
+   * canvas and reflows with its content, so fitView can only keep nodes clear
+   * of it by being told, never by assuming. A stack can be 38% of the viewport.
+   */
+  onHeight: (height: number) => void
+}) {
   const filtered = payload.filtered.count
   const hasNotice =
     payload.dropped > 0 ||
@@ -20,6 +35,21 @@ export function Notices({ payload, query }: { payload: MapPayload; query: MapQue
     payload.out_of_scope > 0 ||
     payload.cycles.length > 0 ||
     Boolean(payload.task)
+
+  const stack = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const node = stack.current
+    // Reported as zero when there is nothing here, so a graph that stops having
+    // notices gets its canvas back instead of keeping the last stack's reserve.
+    if (!node) {
+      onHeight(0)
+      return
+    }
+    const observer = new ResizeObserver(() => onHeight(node.getBoundingClientRect().height))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [onHeight, hasNotice])
+
   if (!hasNotice) return null
 
   const langs = Object.entries(payload.filtered.langs)
@@ -29,10 +59,13 @@ export function Notices({ payload, query }: { payload: MapPayload; query: MapQue
 
   return (
     // Clear of the zoom column on the left: these notices sit above the canvas,
-    // and at z-20 over controls at z-5 they made the zoom buttons unclickable in
+    // and above the controls they made the zoom buttons unclickable in
     // exactly the sessions — trimmed, cyclic, capsule — where getting around the
     // graph matters most.
-    <div className="scroll-thin absolute bottom-3 left-[56px] z-20 flex max-h-[38%] w-96 flex-col gap-2 overflow-y-auto">
+    <div
+      ref={stack}
+      className="scroll-thin absolute bottom-3 left-[56px] z-[var(--z-chrome)] flex max-h-[38%] w-96 flex-col gap-2 overflow-y-auto"
+    >
       {payload.dropped > 0 && (
         <Notice icon={<AlertTriangle className="size-3.5" />} tone="accent">
           <b>

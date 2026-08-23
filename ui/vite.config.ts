@@ -16,15 +16,26 @@ export default defineConfig({
   build: {
     outDir: '../src/view/static',
     emptyOutDir: true,
-    // The map is one page behind a local daemon, not a site: a single file
-    // loads faster than a graph of chunked imports over localhost.
+    // The map is one page behind a local daemon, not a site, so there is no
+    // preload graph worth emitting: everything is a same-host file read.
     modulePreload: false,
+    // One stylesheet, always. The daemon serves `map.css` from a hand-written
+    // route by that exact name, so a per-chunk split would emit a file nothing
+    // asks for and drop half the rules on the floor.
+    cssCodeSplit: false,
     rollupOptions: {
       input: 'src/main.tsx',
       output: {
         entryFileNames: 'map.js',
         assetFileNames: 'map.[ext]',
-        inlineDynamicImports: true,
+        // React Flow is roughly half the bundle and only one of five pages
+        // needs it, so the map is split behind a `lazy()` and lands here as
+        // `map-App.js`. The point is not load time on localhost — it is git:
+        // the bundle is committed, minified JS does not delta, and before the
+        // split every change to a status page rewrote React Flow into history
+        // along with it. `chunkFileNames` stays fixed for the same reason
+        // `entryFileNames` is: the daemon serves these by basename.
+        chunkFileNames: 'map-[name].js',
       },
     },
   },

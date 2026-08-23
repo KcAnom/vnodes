@@ -192,7 +192,24 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       // query, and the link that gets pasted somewhere shows something else.
       if (cmd === 'map' && flags.path) qs.push(`path=${encodeURIComponent(flags.path)}`);
       if (cmd === 'map' && flags.all) qs.push('show=all');
-      const url = `http://127.0.0.1:${cfg.mcp.port}/ui${cmd === 'map' ? '/map' : ''}${qs.length ? `?${qs.join('&')}` : ''}`;
+      // Same argument one level up: /ui is five pages now, and a page reachable
+      // only by typing its path into a browser is a page nobody links to.
+      // `vnodes ui capsule "<task>"` is the one that carries an argument,
+      // because the capsule page with no task is an empty form.
+      let uiPath = '';
+      if (cmd === 'ui') {
+        const page = args.shift();
+        const PAGES = { overview: '', status: '/status', map: '/map', capsule: '/capsule', notes: '/notes', index: '/index' };
+        if (page !== undefined && !(page in PAGES)) {
+          out(`vnodes ui: no page "${page}". Pages: ${Object.keys(PAGES).join(', ')}`);
+          break;
+        }
+        uiPath = page === undefined ? '' : PAGES[page];
+        if (page === 'capsule' && args.length) qs.push(`task=${encodeURIComponent(args.join(' '))}`);
+        if (page === 'capsule' && flags.preset) qs.push(`preset=${encodeURIComponent(flags.preset)}`);
+        if (page === 'notes' && flags.q) qs.push(`q=${encodeURIComponent(flags.q)}`);
+      }
+      const url = `http://127.0.0.1:${cfg.mcp.port}/ui${cmd === 'map' ? '/map' : uiPath}${qs.length ? `?${qs.join('&')}` : ''}`;
       out(url);
       try { require('node:child_process').execFileSync('open', [url]); } catch {}
       break;
@@ -219,7 +236,9 @@ usage: vnodes <command> [args] [--flags]
   doctor                      read-only diagnostics, works with daemon down
   logs [daemon|index] [--follow]
   llm [status|enable|disable|runtime|ask <q>] [--runtime claude-code|pi] [--pi-model grok-4.5-latest|gpt-5.6-sol]
-  ui                          open the status page (design-system seam)
+  ui [page] [args]            open the operator UI. pages: overview (default), map,
+                              capsule "<task>" [--preset p], notes [--q text], index,
+                              status (plain HTML, works with no bundle built)
   map [target|dir] [--path DIR] [--all] [--depth N] [--task "..."]
                               open the live dependency map (scoped to target if given)
                               draws code by default; --all includes markdown, json and config

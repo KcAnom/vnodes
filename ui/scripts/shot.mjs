@@ -63,6 +63,12 @@ const send = (method, params = {}) =>
 await new Promise((resolve) => (socket.onopen = resolve))
 await send('Runtime.enable')
 await send('Page.enable')
+// The bundle is served from a fixed filename with no hash in it, so a Chrome
+// that already has `map.js` will happily photograph the previous build and
+// report a bug that was fixed two builds ago. This script exists to stop
+// exactly that class of false evidence, so the cache is off.
+await send('Network.enable')
+await send('Network.setCacheDisabled', { cacheDisabled: true })
 // deviceScaleFactor 2 so 10px type in a screenshot is still legible to a reader.
 await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: false })
 await send('Page.navigate', { url })

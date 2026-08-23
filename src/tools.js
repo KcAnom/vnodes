@@ -43,7 +43,23 @@ function ensureIndexed(projectRoot, cfg) {
   return indexStatus(projectRoot);
 }
 
-function callTool(projectRoot, name, args = {}, session = 'default') {
+/**
+ * The tools that only read.
+ *
+ * Not a comment, a gate. Every /rpc call inserts an observation (below), so a
+ * browser panel polling tools through /rpc would fill the memory feed agents
+ * actually read with rows whose summary is the literal argument JSON — seven
+ * curl probes produced exactly seven such rows, and at six a minute a panel
+ * owns the whole 500-row relevance window inside an hour. The read-only UI
+ * surface is enforced here rather than in the React client, because the client
+ * is not the thing that decides: the server accepts whatever it is sent.
+ */
+const READ_ONLY_TOOLS = new Set([
+  'run_pipeline', 'get_context_capsule', 'get_impact_graph', 'search_logic_flow',
+  'get_skeleton', 'get_session_context', 'search_memory', 'index_status',
+]);
+
+function dispatch(projectRoot, name, args, session) {
   const cfg = loadConfig(projectRoot);
   const engDir = engineDir(projectRoot);
   let result;
@@ -94,6 +110,12 @@ function callTool(projectRoot, name, args = {}, session = 'default') {
     default:
       throw new Error(`unknown tool: ${name}`);
   }
+  return result;
+}
+
+function callTool(projectRoot, name, args = {}, session = 'default') {
+  const engDir = engineDir(projectRoot);
+  const result = dispatch(projectRoot, name, args, session);
   // Auto-capture (BR-013) — skip save_observation itself (already stored as manual).
   if (name !== 'save_observation') {
     const brief = name.startsWith('run_') || name.includes('capsule')
@@ -105,4 +127,18 @@ function callTool(projectRoot, name, args = {}, session = 'default') {
   return result;
 }
 
-module.exports = { TOOL_DEFS, callTool, ensureIndexed };
+/**
+ * Same dispatch, no write, no observation row.
+ *
+ * A caller that is only allowed to look — the /ui surface — asks through here.
+ * The name check runs before dispatch, so a write tool never reaches its case
+ * even by accident, and nothing on this path can reach the auto-capture block.
+ */
+function callToolReadOnly(projectRoot, name, args = {}, session = 'readonly') {
+  if (!READ_ONLY_TOOLS.has(name)) {
+    throw new Error(`tool '${name}' is not read-only; the UI surface may not call it`);
+  }
+  return dispatch(projectRoot, name, args, session);
+}
+
+module.exports = { TOOL_DEFS, callTool, callToolReadOnly, READ_ONLY_TOOLS, ensureIndexed };

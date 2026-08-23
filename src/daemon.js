@@ -71,6 +71,201 @@ function startWatcher(projectRoot, cfg) {
   return () => { clearTimeout(timer); for (const w of watchers) w.close(); };
 }
 
+const UI_API_ROUTES = ['/ui/api/health', '/ui/api/capsule', '/ui/api/notes', '/ui/api/composition'];
+
+/** Why this /rpc request is refused, or null if it is allowed. */
+function rpcDenial(req, port) {
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  const origin = req.headers.origin;
+  // Absent Origin is the CLI, the MCP client and curl. Present-and-wrong is a
+  // page in somebody's browser reaching a daemon it does not own.
+  if (origin !== undefined && !hosts.some(h => origin === `http://${h}`)) return `origin ${origin}`;
+  if (!hosts.includes(req.headers.host || '')) return `host ${req.headers.host || '(none)'}`;
+  if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+    return `content-type ${req.headers['content-type'] || '(none)'} (application/json required)`;
+  }
+  return null;
+}
+
+function clamp(value, lo, hi, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.trunc(n))) : fallback;
+}
+
+/** Last N lines of a log channel, as lines. Fixed length so the response is bounded. */
+function tailLog(projectRoot, channel, lines = 50) {
+  try {
+    return fs.readFileSync(logPath(projectRoot, channel), 'utf8')
+      .split('\n').filter(Boolean).slice(-lines);
+  } catch {
+    return [];
+  }
+}
+
+/** How many observations there are, and of what kind. Lets the notes page say what it is looking at. */
+function observationCounts(engDir) {
+  const { openMemory } = require('./store');
+  try {
+    const db = openMemory(engDir);
+    const r = db.prepare(`SELECT COUNT(*) total,
+      SUM(CASE WHEN kind = 'manual' THEN 1 ELSE 0 END) manual,
+      SUM(CASE WHEN kind <> 'manual' THEN 1 ELSE 0 END) auto,
+      SUM(CASE WHEN stale = 1 THEN 1 ELSE 0 END) stale FROM observations`).get();
+    db.close();
+    return { total: Number(r.total || 0), manual: Number(r.manual || 0), auto: Number(r.auto || 0), stale: Number(r.stale || 0) };
+  } catch {
+    return { total: 0, manual: 0, auto: 0, stale: 0 };
+  }
+}
+
+/**
+ * The capsule as the UI is allowed to see it.
+ *
+ * File bodies come out. The operator already has every one of these files open
+ * in an editor two inches away, and shipping them would make this a 35 KB
+ * response that says nothing the editor does not. The single exception is the
+ * head of a clipped pivot: that is the one thing the editor cannot show,
+ * because the clip is a decision the capsule made and not a fact about the file.
+ */
+function capsuleForUi(capsule, task, cfg) {
+  const CLIP_HEAD_CHARS = 2000;
+  return {
+    ...capsule,
+    pivots: capsule.pivots.map(p => {
+      const out = { file: p.file, tokens: p.tokens };
+      if (p.clipped) {
+        out.clipped = true;
+        out.full_tokens = p.full_tokens;
+        out.content = String(p.content || '').slice(0, CLIP_HEAD_CHARS);
+        out.content_is_head_of_clip = true;
+      }
+      return out;
+    }),
+    skeletons: capsule.skeletons.map(s => ({ file: s.file, tokens: s.tokens, detail: s.detail })),
+    stripped: 'file bodies are not sent to the UI; only the head of a clipped pivot is',
+    baseline: cfg.capsule.savings_baseline,
+    command: `vnodes pipeline ${JSON.stringify(task)}`,
+  };
+}
+
+/**
+ * What the index is actually made of.
+ *
+ * /status and doctor both reported healthy while 78% of this index was a
+ * headless-Chrome profile, because neither of them looks at where the files
+ * are or how big they are — index_status counts languages, and "173 json" is a
+ * true sentence about a browser cache. Grouping on the first two path segments
+ * is what makes `ui/.shots` its own row instead of a number hiding inside `ui`.
+ */
+function composition(engDir) {
+  const { openStore } = require('./store');
+  const db = openStore(engDir);
+  const files = db.prepare('SELECT path, repo, lang, size FROM files').all();
+  const symbols = new Map(db.prepare('SELECT file, COUNT(*) c FROM nodes GROUP BY file').all().map(r => [r.file, Number(r.c)]));
+  const connected = new Set();
+  for (const e of db.prepare('SELECT src_file, dst_file FROM edges').all()) {
+    connected.add(e.src_file); connected.add(e.dst_file);
+  }
+  db.close();
+
+  const dirs = new Map();
+  for (const f of files) {
+    const parts = String(f.path).split('/');
+    parts.pop(); // the filename is not a directory
+    const dir = parts.slice(0, 2).join('/') || '(root)';
+    let row = dirs.get(dir);
+    if (!row) dirs.set(dir, row = { dir, files: 0, bytes: 0, langs: {}, inert: 0 });
+    row.files++;
+    row.bytes += Number(f.size || 0);
+    row.langs[f.lang || 'unknown'] = (row.langs[f.lang || 'unknown'] || 0) + 1;
+    if (!symbols.get(f.path) && !connected.has(f.path)) row.inert++;
+  }
+  const byDir = [...dirs.values()].sort((a, b) => b.files - a.files);
+
+  // A remedy is a line to copy, never a write: the daemon diagnosing its own
+  // index is useful, the daemon editing .vnodesignore behind the operator's
+  // back is the same class of surprise as a UI that saves observations.
+  const ignoreSuggestion = byDir
+    .filter(d => d.dir !== '(root)' && d.files >= 5 && d.inert / d.files >= 0.9)
+    .slice(0, 5)
+    .map(d => `${d.dir}/`);
+
+  const LIST_CAP = 50;
+  const noSymbols = files.filter(f => !symbols.get(f.path)).map(f => f.path);
+  const noEdges = files.filter(f => !connected.has(f.path)).map(f => f.path);
+
+  return {
+    total_files: files.length,
+    total_bytes: files.reduce((a, f) => a + Number(f.size || 0), 0),
+    by_dir: byDir.slice(0, 12).map(({ inert, ...row }) => ({ ...row, inert_files: inert })),
+    by_dir_shown: Math.min(12, byDir.length),
+    by_dir_total: byDir.length,
+    largest: [...files].sort((a, b) => Number(b.size || 0) - Number(a.size || 0)).slice(0, 10)
+      .map(f => ({ path: f.path, size: Number(f.size || 0), lang: f.lang, symbols: symbols.get(f.path) || 0 })),
+    // Capped, and the count says how far past the cap it goes: a repo where
+    // four thousand files parsed to nothing is exactly the repo where this
+    // response must not be four thousand strings long.
+    no_symbols: noSymbols.slice(0, LIST_CAP),
+    no_symbols_total: noSymbols.length,
+    no_edges: noEdges.slice(0, LIST_CAP),
+    no_edges_total: noEdges.length,
+    list_cap: LIST_CAP,
+    ignore_suggestion: ignoreSuggestion,
+  };
+}
+
+/**
+ * The read-only data family behind the operator pages.
+ *
+ * None of these go through callTool. Every callTool invocation inserts an
+ * observation (BR-013), so a panel that polls would fill the memory feed agents
+ * read with rows summarising its own polling — which is both noise and a lie
+ * about what happened in the session. Calling buildCapsule / sessionContext /
+ * searchMemory / doctor directly is the pattern src/view/index.js already uses
+ * for the map, and it writes nothing.
+ */
+function uiApi(pathname, q, projectRoot, cfg, send) {
+  const engDir = engineDir(projectRoot);
+  if (pathname === '/ui/api/health') {
+    const { llmState, runtimeInfo, runtimeCliFound } = require('./runtime');
+    // doctor() is async (it probes the port) and createServer's callback is not,
+    // so the response is written from the promise rather than returned.
+    doctor(projectRoot).then(d => send(200, {
+      doctor: d,
+      llm: { ...llmState(projectRoot), mode: 'runtime-cli', runtime: runtimeInfo(projectRoot), runtime_cli_found: runtimeCliFound(projectRoot) },
+      config: loadConfig(projectRoot),
+      logs: { daemon: tailLog(projectRoot, 'daemon'), index: tailLog(projectRoot, 'index'), tail_lines: 50 },
+    })).catch(e => send(500, { error: e.message }));
+    return;
+  }
+  if (pathname === '/ui/api/capsule') {
+    const task = String(q.task || '').trim();
+    if (!task) return send(400, { error: 'no task' });
+    const { buildCapsule } = require('./capsule');
+    const capsule = buildCapsule(projectRoot, engDir, cfg, {
+      task,
+      preset: q.preset || undefined,
+      max_tokens: clamp(q.max_tokens, 500, 200000, undefined),
+      session: 'ui',
+    });
+    return send(200, capsuleForUi(capsule, task, cfg));
+  }
+  if (pathname === '/ui/api/notes') {
+    const { searchMemory, sessionContext } = require('./memory');
+    const limit = clamp(q.limit, 1, 100, 20);
+    const counts = observationCounts(engDir);
+    // No `session` on either call: this daemon is not an agent session, and
+    // passing one would sort the browser's own reads to the top of a feed whose
+    // whole point is what the agents did.
+    const query = String(q.q || '').trim();
+    return query
+      ? send(200, { query, results: searchMemory(engDir, query, { limit }), counts })
+      : send(200, { observations: sessionContext(engDir, { limit }), counts });
+  }
+  if (pathname === '/ui/api/composition') return send(200, composition(engDir));
+  return send(404, { error: 'no such api route', api: UI_API_ROUTES });
+}
+
 function serve(projectRoot) {
   const cfg = loadConfig(projectRoot);
   const port = cfg.mcp.port;
@@ -85,8 +280,19 @@ function serve(projectRoot) {
       return send(200, { daemon: 'running', pid: process.pid, port, project: projectRoot, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
     }
     if (req.method === 'GET' && req.url === '/tools') return send(200, { tools: TOOL_DEFS });
-    if (req.method === 'GET' && req.url.startsWith('/ui')) {
-      const url = new URL(req.url, `http://127.0.0.1:${port}`);
+    // Parsing moved up here from inside the /ui branch, which means it now runs
+    // on every request — and `new URL('//', base)` throws, which in a request
+    // listener takes the whole daemon down. Answer it as the bad request it is.
+    let url;
+    try { url = new URL(req.url, `http://127.0.0.1:${port}`); }
+    catch { return send(400, { error: 'malformed url', url: req.url }); }
+    // Gate on the parsed pathname, not on the raw URL's prefix. `startsWith('/ui')`
+    // matched /uifoo and /ui-anything, and the branch ended in a catch-all that
+    // returned 200 plus the status page for every unknown path under it. With
+    // five real pages, that turns a typo in a shared link into a successful
+    // response drawing the wrong screen — the exact failure "omission is never
+    // silent" exists to rule out.
+    if (req.method === 'GET' && (url.pathname === '/ui' || url.pathname.startsWith('/ui/'))) {
       const q = Object.fromEntries(url.searchParams);
       if (url.pathname === '/ui/theme.css') return send(200, uiThemeCss(), 'text/css');
       if (url.pathname.startsWith('/ui/static/')) {
@@ -98,10 +304,11 @@ function serve(projectRoot) {
         res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'no-cache' });
         return res.end(asset.body);
       }
-      if (url.pathname === '/ui/map') {
-        const { renderShell } = require('./view/shell');
-        return send(200, renderShell(), 'text/html');
-      }
+      // The plain-HTML floor. Kept deliberately: it is the one page that still
+      // renders when the bundle is missing or the app throws on boot, it needs
+      // no JavaScript beyond a fetch loop, and it is what keeps
+      // cfg.ui.sidebar_refresh_s a setting that does something.
+      if (url.pathname === '/ui/status') return send(200, uiHtml(cfg), 'text/html');
       // The payload the page draws. Also the honest answer to "what does the map
       // know" for anything that is not a browser.
       if (url.pathname === '/ui/map/data') {
@@ -114,9 +321,25 @@ function serve(projectRoot) {
         const detail = fileDetail(engineDir(projectRoot), q.file || '');
         return detail ? send(200, detail) : send(404, { error: 'not indexed', file: q.file || '' });
       }
-      return send(200, uiHtml(cfg), 'text/html');
+      if (url.pathname.startsWith('/ui/api/')) return uiApi(url.pathname, q, projectRoot, cfg, send);
+      const { PAGES, renderShell } = require('./view/shell');
+      if (PAGES.has(url.pathname)) return send(200, renderShell(url.pathname), 'text/html');
+      return send(404, { error: 'no such page', pages: [...PAGES.keys()], api: UI_API_ROUTES });
     }
     if (req.method === 'POST' && req.url === '/rpc') {
+      // /rpc reaches every tool, including save_observation and workspace_setup,
+      // and until now it accepted a cross-origin POST with content-type
+      // text/plain — which is a CORS-simple request, so any page in the
+      // reader's browser could fire it with no preflight and no consent.
+      // Binding to 127.0.0.1 is not a defence: the browser is on 127.0.0.1 too.
+      // Demanding application/json forces a preflight the Origin rule then
+      // fails; the CLI and MCP clients send no Origin at all, so nothing
+      // legitimate changes.
+      const denial = rpcDenial(req, port);
+      if (denial) {
+        log(projectRoot, 'daemon', `rpc refused: ${denial}`);
+        return send(403, { ok: false, error: `refused: ${denial}` });
+      }
       let body = '';
       req.on('data', c => { body += c; });
       req.on('end', () => {
@@ -131,7 +354,12 @@ function serve(projectRoot) {
       });
       return;
     }
-    send(404, { error: 'not found', endpoints: ['/status', '/tools', '/rpc', '/ui', '/ui/map', '/ui/map/data'] });
+    const { PAGES } = require('./view/shell');
+    send(404, {
+      error: 'not found',
+      endpoints: ['/status', '/tools', '/rpc', ...PAGES.keys(), '/ui/status', '/ui/theme.css',
+        '/ui/static/*', '/ui/map/data', '/ui/map/events', '/ui/map/node', ...UI_API_ROUTES],
+    });
   });
   server.on('error', e => {
     if (e.code === 'EADDRINUSE') {
@@ -170,8 +398,14 @@ function startDetached(projectRoot) {
 // start it and retry.
 async function httpCall(projectRoot, tool, args, session) {
   const cfg = loadConfig(projectRoot);
+  // The content-type is load-bearing, not decoration: /rpc refuses anything but
+  // application/json, because text/plain is a CORS-simple type and accepting it
+  // is what let a cross-origin page call the write tools. fetch() would default
+  // this body to text/plain.
   const attempt = () => fetch(`http://127.0.0.1:${cfg.mcp.port}/rpc`, {
-    method: 'POST', body: JSON.stringify({ tool, arguments: args, session }),
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tool, arguments: args, session }),
   }).then(r => r.json());
   try { return await attempt(); }
   catch {
@@ -305,16 +539,29 @@ function mapEvents(req, res, projectRoot, cfg, query) {
 }
 
 function uiHtml(cfg) {
-  // M9 minimal surface. Styling deliberately absent: /ui/theme.css is the
-  // design-system insertion seam (owner build directive 2).
-  return `<!doctype html><html><head><meta charset="utf-8"><title>vnodes</title>
+  // The no-JS floor at /ui/status. This page exists precisely because the rest
+  // of /ui is now a React bundle: when the bundle is missing, stale or throws
+  // on boot, something still has to answer the question "is the daemon alive
+  // and what does it think it has indexed", and it has to answer without
+  // depending on any of the machinery that might be what broke. Plain HTML, one
+  // fetch loop, no build step. It is also the only remaining reader of
+  // cfg.ui.sidebar_refresh_s.
+  return `<!doctype html><html><head><meta charset="utf-8"><title>vnodes — status</title>
 <link rel="stylesheet" href="/ui/theme.css"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body><main>
 <h1>vnodes</h1><p id="state">loading…</p>
 <dl><dt>Files</dt><dd id="files">–</dd><dt>Nodes</dt><dd id="nodes">–</dd>
 <dt>Edges</dt><dd id="edges">–</dd><dt>Repos</dt><dd id="repos">–</dd>
 <dt>Last index</dt><dd id="last">–</dd></dl>
-<p><a href="/ui/map">dependency map →</a></p>
+<p>This is the plain-HTML status page — it shows the counts and nothing else.
+The pages that explain them need the built bundle:</p>
+<ul>
+<li><a href="/ui">overview</a> — doctor checks, language mix, logs</li>
+<li><a href="/ui/map">dependency map</a></li>
+<li><a href="/ui/capsule">capsule preview</a> — what an agent is handed for a task</li>
+<li><a href="/ui/notes">notes &amp; staleness</a></li>
+<li><a href="/ui/index">index composition</a> — what is actually indexed</li>
+</ul>
 <script>
 async function tick(){try{const r=await fetch('/status');const s=await r.json();
 document.getElementById('state').textContent='daemon running · index '+s.index.state;
@@ -327,10 +574,25 @@ tick();setInterval(tick,${(cfg.ui.sidebar_refresh_s || 10) * 1000});
 }
 
 function uiThemeCss() {
-  return `/* vnodes UI theme — design-system insertion seam.
-   Intentionally unstyled per owner build directive 2: drop a design-dna
-   package's tokens/styles here (e.g. from a ~/Documents/<system>/DESIGN_SYSTEM.md). */
-body { font-family: monospace; margin: 2rem; }`;
+  // Not the design-system seam any more — that moved into the bundle
+  // (ui/src/theme.css) when the whole UI became one React shell. This
+  // stylesheet dresses exactly two pages, and both of them are the ones that
+  // have to render when the bundle does not: /ui/status and the missing-bundle
+  // notice. Keep it small enough to never be the reason either fails.
+  return `/* vnodes — the stylesheet for the pages that must work with no bundle:
+   /ui/status and the missing-bundle notice. The design system lives in the
+   bundle (ui/src/theme.css); nothing here is a seam for it. */
+:root { color-scheme: light dark; }
+body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; line-height: 1.5; max-width: 46rem; }
+dt { font-weight: 600; }
+dd { margin: 0 0 0.5rem 0; }
+code, pre { font-family: inherit; }`;
 }
 
-module.exports = { serve, startDetached, stopDaemon, daemonState, doctor, httpCall };
+module.exports = {
+  serve, startDetached, stopDaemon, daemonState, doctor, httpCall,
+  // Exported for the tests that pin the two guarantees this file now carries:
+  // that /rpc refuses a cross-origin write, and that the UI's data routes are
+  // computed without a tool call.
+  rpcDenial, composition, capsuleForUi, observationCounts, tailLog, UI_API_ROUTES,
+};

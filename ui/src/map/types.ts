@@ -112,4 +112,10 @@ export type MapQuery = {
   path?: string
   /** `all` to include the non-code files `code` withholds. */
   show?: string
+  /**
+   * `0` for the roomier geometry. Carried here so a link that asks for it keeps
+   * asking for it: the server reads this param, and until it was added to
+   * `readQuery` the client dropped it on every redraw.
+   */
+  compact?: string
 }

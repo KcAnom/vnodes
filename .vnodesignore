@@ -6,3 +6,10 @@
 # so nobody needs a toolchain to use vnodes.
 src/view/static/
 ui/package-lock.json
+
+# Headless-Chrome scratch written by the repo's own ui/scripts/shots.sh
+# (--user-data-dir). 181 of 232 indexed files lived here, and they ranked into
+# real capsules: one run spent 2,196 of its 8,000 tokens on a Chrome
+# bindings_main.js. A rendering check must not poison the index it is checking.
+ui/.shots/
+ui/.probe/

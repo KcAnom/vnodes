@@ -11,6 +11,13 @@ import { queryString } from './api'
 import { TONE_CLASSES, groupColor } from './FileNode'
 import type { MapPayload, MapQuery } from './types'
 import { cn } from '../kit/utils'
+import { Input } from '../shell/Input'
+import { Stat } from '../shell/Stat'
+
+// Re-exported because this rail is where the chip vocabulary started: it now
+// lives in the shell so every page counts things the same way, and importing it
+// from here keeps the map's own call sites reading as they did.
+export { Stat }
 
 // The legend and the nodes read from one table, so a swatch here can never be a
 // different colour from the mark it names.
@@ -86,7 +93,7 @@ export function Toolbar({
   return (
     <header
       ref={header}
-      className="surface absolute top-3 right-3 left-3 z-20 flex flex-col gap-2.5 px-3 py-2.5"
+      className="surface absolute top-3 right-3 left-3 z-[var(--z-chrome)] flex flex-col gap-2.5 px-3 py-2.5"
     >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-[13px]">{scope}</h1>
@@ -161,34 +168,38 @@ export function Toolbar({
       <div className="flex flex-wrap items-center gap-2">
         {/* A GET form, so submitting is a navigation and the result is a URL. */}
         <form action="/ui/map" method="get" className="flex flex-wrap items-center gap-1.5">
-          <Field
+          <Input
             name="path"
             placeholder="directory"
             value={draft.path ?? ''}
-            onChange={(path) => setDraft((d) => ({ ...d, path }))}
-            width="w-32"
+            onChange={(event) => setDraft((d) => ({ ...d, path: event.target.value }))}
+            className="w-32"
           />
-          <Field
+          <Input
             name="target"
             placeholder="file or symbol"
             value={draft.target ?? ''}
-            onChange={(target) => setDraft((d) => ({ ...d, target }))}
-            width="w-44"
+            onChange={(event) => setDraft((d) => ({ ...d, target: event.target.value }))}
+            className="w-44"
           />
-          <Field
+          <Input
             name="task"
             placeholder="task, for a capsule overlay"
             value={draft.task ?? ''}
-            onChange={(task) => setDraft((d) => ({ ...d, task }))}
-            width="w-60"
+            onChange={(event) => setDraft((d) => ({ ...d, task: event.target.value }))}
+            className="w-60"
           />
-          <Field
+          <Input
             name="depth"
             placeholder="depth"
             value={draft.depth ?? ''}
-            onChange={(depth) => setDraft((d) => ({ ...d, depth }))}
-            width="w-16"
+            onChange={(event) => setDraft((d) => ({ ...d, depth: event.target.value }))}
+            className="w-16"
           />
+          {/* Carried through every redraw, and only when it is not the default:
+              the server reads `compact`, so dropping it here would quietly undo
+              a reader's choice of the roomier geometry on the next submit. */}
+          {draft.compact && <input type="hidden" name="compact" value={draft.compact} />}
           {/* Carried, not shown: redrawing must not quietly re-hide the files
               the reader asked to see. Absent at the default, so the URL only
               ever spells out the deliberate choice. */}
@@ -211,12 +222,12 @@ export function Toolbar({
 
         <label className="relative ml-auto">
           <Search className="pointer-events-none absolute top-1/2 left-2 size-3 -translate-y-1/2 text-muted-foreground" />
-          <input
+          <Input
             type="search"
             value={filter}
             onChange={(event) => onFilter(event.target.value)}
             placeholder="filter by path…"
-            className="w-52 rounded border border-border bg-background py-1 pr-2 pl-7 text-[12px] outline-none focus:border-border-active"
+            className="w-52 pr-2 pl-7"
           />
         </label>
 
@@ -230,65 +241,6 @@ export function Toolbar({
         </ul>
       </div>
     </header>
-  )
-}
-
-function Stat({
-  label,
-  value,
-  on,
-  href,
-  title,
-}: {
-  label: string
-  value: number
-  on?: boolean
-  /** Given, the chip is the control for the thing it counts. */
-  href?: string
-  title?: string
-}) {
-  const className = cn(
-    'rounded border border-border px-1.5 py-0.5',
-    on ? 'border-accent text-accent' : 'text-muted-foreground',
-    href && 'hover:bg-panel-hover',
-  )
-  const body = (
-    <>
-      {label} <b className="text-foreground">{value}</b>
-    </>
-  )
-  if (!href) return <span className={className}>{body}</span>
-  return (
-    <a href={href} title={title} className={className}>
-      {body}
-    </a>
-  )
-}
-
-function Field({
-  name,
-  placeholder,
-  value,
-  onChange,
-  width,
-}: {
-  name: string
-  placeholder: string
-  value: string
-  onChange: (next: string) => void
-  width: string
-}) {
-  return (
-    <input
-      name={name}
-      value={value}
-      placeholder={placeholder}
-      onChange={(event) => onChange(event.target.value)}
-      className={cn(
-        width,
-        'rounded border border-border bg-background px-2 py-1 text-[12px] outline-none focus:border-border-active',
-      )}
-    />
   )
 }
 

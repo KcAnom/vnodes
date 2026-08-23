@@ -560,3 +560,137 @@ test('an anchored document is drawn: the content filter never eats a pivot', () 
   const target = subgraph(eng(root), { target: 'docs/notes.md', depth: 0 });
   assert.deepStrictEqual(paths(target), ['docs/notes.md'], 'and so does an explicit target');
 });
+
+// ------------------------------------------------- the rest of the /ui surface
+//
+// /ui stopped being one map page and one <dl>. What follows pins the parts a
+// renderer cannot check for itself: which URLs exist, what the shell says it is
+// before React boots, what the read-only data routes are allowed to hand over,
+// and the two hardening rules that only look like configuration.
+
+test('every page the daemon dispatches has a title of its own', () => {
+  const { PAGES, renderShell } = require('../src/view/shell');
+  assert.deepStrictEqual([...PAGES.keys()],
+    ['/ui', '/ui/map', '/ui/capsule', '/ui/notes', '/ui/index']);
+  for (const [pathname, title] of PAGES) {
+    const html = renderShell(pathname);
+    assert.match(html, new RegExp(`<title>${title.replace(/[—]/g, '.')}</title>`),
+      `${pathname} did not render its own title`);
+    assert.ok(!/https?:\/\/(?!127\.0\.0\.1)/.test(html), 'the page reaches no host but this one');
+  }
+  // Four routes drew "dependency map" in the tab before React booted. The
+  // zero-argument call is what the old test and the old daemon both used.
+  assert.match(renderShell(), /<title>vnodes — dependency map<\/title>/);
+});
+
+test('only the map preloads the React Flow chunk', () => {
+  const { renderShell, STATIC_DIR } = require('../src/view/shell');
+  const split = fs.existsSync(path.join(STATIC_DIR, 'map-App.js'));
+  for (const pathname of ['/ui', '/ui/capsule', '/ui/notes', '/ui/index']) {
+    assert.ok(!renderShell(pathname).includes('modulepreload'),
+      `${pathname} preloads a chunk it does not draw`);
+  }
+  assert.strictEqual(renderShell('/ui/map').includes('modulepreload'), split,
+    'the map preloads its chunk exactly when the split build has emitted one');
+});
+
+test('a missing asset is named, not implied', () => {
+  const { renderMissingBundle } = require('../src/view/shell');
+  const html = renderMissingBundle(['map-App.js']);
+  assert.match(html, /map-App\.js/, 'the page must say which file is missing');
+  assert.match(html, /\/ui\/status/, 'and point at the page that needs no bundle');
+  assert.match(html, /\/ui\/map\/data/);
+});
+
+test('/rpc refuses the cross-origin write hole and nothing else', () => {
+  const { rpcDenial } = require('../src/daemon');
+  const req = (headers) => ({ headers });
+  const json = { host: '127.0.0.1:7821', 'content-type': 'application/json' };
+
+  // The CLI and the MCP client: no Origin at all.
+  assert.strictEqual(rpcDenial(req(json), 7821), null);
+  assert.strictEqual(rpcDenial(req({ ...json, host: 'localhost:7821' }), 7821), null);
+  assert.strictEqual(rpcDenial(req({ ...json, origin: 'http://127.0.0.1:7821' }), 7821), null);
+  assert.strictEqual(rpcDenial(req({ ...json, 'content-type': 'application/json; charset=utf-8' }), 7821), null);
+
+  // The hole: text/plain is CORS-simple, so a page anywhere could POST it with
+  // no preflight, and /rpc reaches save_observation and workspace_setup.
+  assert.match(rpcDenial(req({ ...json, 'content-type': 'text/plain' }), 7821), /content-type/);
+  assert.match(rpcDenial(req({ ...json, origin: 'https://evil.example' }), 7821), /origin/);
+  assert.match(rpcDenial(req({ ...json, host: 'evil.example' }), 7821), /host/);
+  assert.match(rpcDenial(req({ host: '127.0.0.1:7821' }), 7821), /content-type/);
+});
+
+test('the capsule the UI is handed carries costs, not file bodies', () => {
+  const { capsuleForUi } = require('../src/daemon');
+  const cfg = loadConfig(process.cwd());
+  const raw = {
+    intent: 'debug', intent_reason: 'regex', budget_tokens: 8000, used_tokens: 100,
+    pivots: [
+      { file: 'src/a.js', tokens: 40, content: 'x'.repeat(9000) },
+      { file: 'src/b.js', tokens: 60, content: 'y'.repeat(9000), clipped: true, full_tokens: 2850 },
+    ],
+    skeletons: [{ file: 'src/c.js', tokens: 10, detail: 'standard', content: 'z'.repeat(5000) }],
+    memories: [], truncated: true, omitted: [{ file: 'src/d.js', est_tokens: 12, reason: 'budget' }],
+  };
+  const ui = capsuleForUi(raw, 'why does it fail', cfg);
+  assert.strictEqual(ui.pivots[0].content, undefined, 'an unclipped pivot ships no body');
+  assert.strictEqual(ui.pivots[0].tokens, 40, 'but keeps its cost');
+  assert.strictEqual(ui.pivots[1].content.length, 2000, 'a clipped pivot ships the head of the clip only');
+  assert.strictEqual(ui.pivots[1].full_tokens, 2850, 'and what it would have cost whole');
+  assert.strictEqual(ui.skeletons[0].content, undefined);
+  assert.strictEqual(ui.skeletons[0].tokens, 10);
+  assert.ok(ui.stripped, 'the page has to be able to say the bodies are not here');
+  assert.strictEqual(ui.baseline, cfg.capsule.savings_baseline);
+  assert.strictEqual(ui.command, 'vnodes pipeline "why does it fail"');
+  assert.deepStrictEqual(ui.omitted, raw.omitted, 'omissions survive the strip');
+});
+
+test('composition sees where files are and how big they are', () => {
+  const root = fixture({
+    'src/one.ts': 'import { two } from "./two";\nexport function one() { return two(); }\n',
+    'src/two.ts': 'export function two() { return 2; }\n',
+    'ui/.shots/.chrome/a.json': '{"a":1}\n',
+    'ui/.shots/.chrome/b.json': '{"b":2}\n',
+    'notes.md': '# notes\n',
+  });
+  const { composition } = require('../src/daemon');
+  const c = composition(eng(root));
+
+  assert.strictEqual(c.total_files, 5);
+  assert.ok(c.total_bytes > 0);
+  const dirs = c.by_dir.map(d => d.dir);
+  // Two segments, not one: `ui/.shots` hiding inside `ui` is how 78% of an
+  // index became invisible to every check the project had.
+  assert.ok(dirs.includes('ui/.shots'), `expected ui/.shots as its own row, got ${dirs.join(', ')}`);
+  assert.ok(dirs.includes('src'));
+  assert.ok(dirs.includes('(root)'), 'a file at the top of the tree still belongs somewhere');
+  assert.strictEqual(c.by_dir.find(d => d.dir === 'src').files, 2);
+  assert.ok(c.largest.length > 0 && c.largest[0].size >= c.largest[c.largest.length - 1].size);
+  assert.ok(c.no_edges.includes('notes.md'), 'a file with no edges is named');
+  assert.strictEqual(c.no_edges_total, c.no_edges.length, 'the cap has to report how much it cut');
+  assert.strictEqual(c.no_symbols_total, c.no_symbols.length);
+  assert.ok(c.ignore_suggestion.every(s => typeof s === 'string'),
+    'a remedy is a line to copy — the daemon never writes .vnodesignore itself');
+});
+
+test('a nested .gitignore is read one level down', () => {
+  // ui/.gitignore already said `.shots/` and the indexer never looked at it,
+  // because ignore-file names were joined against the project root alone.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-nested-ignore-'));
+  fs.mkdirSync(path.join(root, 'ui', '.shots'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'ui', '.gitignore'), '.shots/\n');
+  fs.writeFileSync(path.join(root, 'ui', '.shots', 'cache.js'), 'export const junk = 1;\n');
+  fs.writeFileSync(path.join(root, 'ui', 'real.js'), 'export const real = 1;\n');
+  fs.writeFileSync(path.join(root, 'src', 'shots.js'), 'export const shots = 1;\n');
+
+  const { buildIgnore } = require('../src/ignore');
+  const isIgnored = buildIgnore(root);
+  assert.strictEqual(isIgnored('ui/.shots/cache.js'), true);
+  assert.strictEqual(isIgnored('ui/real.js'), false);
+  // Scoped to the directory that declared it, the way git scopes it: a rule in
+  // ui/.gitignore must not reach across the tree and eat src/.
+  assert.strictEqual(isIgnored('src/.shots/cache.js'), false);
+  assert.strictEqual(isIgnored('src/shots.js'), false);
+});

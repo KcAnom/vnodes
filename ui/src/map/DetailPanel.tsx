@@ -55,7 +55,7 @@ export function DetailPanel({
   }, [onClose])
 
   return (
-    <aside className="surface scroll-thin absolute top-3 right-3 bottom-3 z-20 flex w-80 flex-col overflow-y-auto">
+    <aside className="surface scroll-thin absolute top-3 right-3 bottom-3 z-[var(--z-panel)] flex w-80 flex-col overflow-y-auto">
       <header className="sticky top-0 flex items-start gap-2 border-b border-border bg-panel px-3 py-2.5">
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px]">{file.split('/').pop()}</p>

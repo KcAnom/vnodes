@@ -68,11 +68,53 @@ Where the new renderer does something different, and why.
 - Hover popovers on node headers. There was nothing to put in them that the
   detail panel does not show better.
 
+## The rest of /ui followed the map
+
+The map was the first page onto the React shell; the others followed. `/ui` is
+now five React pages served from one bundle, plus one page that is deliberately
+not.
+
+| Page | What it answers |
+| --- | --- |
+| `/ui` | overview — the headline verdict, doctor's checks with their `detail` strings verbatim, language mix, log tails |
+| `/ui/map` | the dependency map, unchanged, with all seven query params intact |
+| `/ui/capsule?task=` | what an agent is actually handed for a task: budget bar, manifest sorted by token cost, what was clipped, what was cut |
+| `/ui/notes?q=` | observations and staleness, stale first, with the tool-call log kept behind a disclosure that says it is a log of calls |
+| `/ui/index` | what is actually indexed — directories, sizes, files that parsed to nothing |
+| `/ui/status` | **the no-JS floor.** Plain HTML, one fetch loop, no bundle |
+
+`/ui/status` is the page that must still render when the bundle is missing,
+stale, or throws on boot. It is also the only remaining reader of
+`cfg.ui.sidebar_refresh_s`.
+
+Data comes from a read-only family — `/ui/api/health`, `/ui/api/capsule`,
+`/ui/api/notes`, `/ui/api/composition` — which calls `buildCapsule`,
+`sessionContext`, `searchMemory` and `doctor` directly, exactly the way
+`src/view/index.js` already called `buildCapsule` for the map overlay. Not
+through `callTool`: every `callTool` invocation inserts an observation (BR-013),
+so a panel that polls would fill the memory feed agents read with rows
+summarising its own polling.
+
+Any other path under `/ui` is a 404 listing the pages. It used to be a 200
+serving the status page — `/uifoo`, `/ui/tools` and `/ui/anything/deep` all
+drew it — which with five real pages would turn a typo in a shared link into a
+successful response showing the wrong screen.
+
 ## Constraints that still hold
 
-- `/ui/theme.css` remains the styling seam for the rest of the UI surface. The
-  map's own tokens live in `ui/src/theme.css` and ship inside the bundle.
 - The bundle is committed. Using vnodes still installs nothing and builds
   nothing.
 - No outbound network at runtime: the daemon serves the assets off disk.
 - Path traversal on `/ui/static/` is refused — asserted in `view.test.js`.
+- The UI is read-only — asserted in `ui-readonly.test.js`, which checks that
+  nothing shipped to the browser names `save_observation` or `workspace_setup`,
+  that `callToolReadOnly` refuses them, and that the client's routes and the
+  server's pages are the same set.
+
+## Constraint that moved
+
+- `/ui/theme.css` is **no longer the design-system insertion seam.** The design
+  system lives in the bundle (`ui/src/theme.css`), where the whole UI now is.
+  What `/ui/theme.css` dresses is the two pages that have to render when the
+  bundle does not: `/ui/status` and the missing-bundle notice. Style the wrong
+  one of those two files and the work lands on a page almost nobody sees.

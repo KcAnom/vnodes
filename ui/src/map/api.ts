@@ -18,9 +18,17 @@ export function queryString(query: MapQuery): string {
   return encoded ? `?${encoded}` : ''
 }
 
-/** The query the page was opened with. The URL is the state; there is no other. */
-export function queryFromLocation(): MapQuery {
-  const params = new URLSearchParams(window.location.search)
+/**
+ * The query, read off a set of params. The URL is the state; there is no other.
+ *
+ * `compact` is in this list because it was missing from it, and that was a bug
+ * with a URL on the must-keep-working list: the server honours `?compact=0`
+ * (nodeWidth 280, colGap 120, maxRows 14 instead of 208/96/11), but this client
+ * rebuilt every request from the keys it read, so the param was dropped on the
+ * first fetch and on every SSE reconnect alike. A key the client does not read
+ * is a key the client silently deletes.
+ */
+export function readQuery(params: URLSearchParams): MapQuery {
   return {
     target: params.get('target') ?? '',
     task: params.get('task') ?? '',
@@ -28,7 +36,13 @@ export function queryFromLocation(): MapQuery {
     depth: params.get('depth') ?? '',
     path: params.get('path') ?? '',
     show: params.get('show') ?? '',
+    compact: params.get('compact') ?? '',
   }
+}
+
+/** The query the page was opened with, for a caller that has no router. */
+export function queryFromLocation(): MapQuery {
+  return readQuery(new URLSearchParams(window.location.search))
 }
 
 export async function fetchMap(query: MapQuery): Promise<MapPayload> {

@@ -19,19 +19,35 @@ import {
   ReactFlowProvider,
   useReactFlow,
   type Edge,
+  type EdgeTypes,
   type FitViewOptions,
   type NodeTypes,
 } from '@xyflow/react'
 import { FileNode, type FileFlowNode } from './FileNode'
 import { DetailPanel } from './DetailPanel'
+import { GutterEdge } from './GutterEdge'
 import { Notices } from './Notices'
 import { Toolbar } from './Toolbar'
-import { fetchMap, queryFromLocation, queryString, subscribe } from './api'
+import { fetchMap, queryString, readQuery, subscribe } from './api'
+import { Centered } from '../shell/Centered'
+import { navigate, useRoute } from '../shell/route'
 import type { MapEdge, MapPayload, MapQuery } from './types'
 
 // React Flow remounts every node when this object changes identity, so it is
-// built once at module scope rather than per render.
+// built once at module scope rather than per render. The same is true of the
+// edge table, which is why the gutter edge is registered here and not inline.
 const NODE_TYPES: NodeTypes = { file: FileNode }
+const EDGE_TYPES: EdgeTypes = { gutter: GutterEdge }
+
+/**
+ * Which edges paint over which. Only the closure edges used to carry a zIndex,
+ * so every ordinary edge defaulted to 0 and painted *under* the node boxes —
+ * which is why a dependency map's dependencies kept disappearing behind the
+ * things they connect. Ranked by how much the reader asked for it: a dimmed
+ * edge is background, a cycle is a defect, and the closure is the answer to the
+ * question they clicked.
+ */
+const EDGE_Z = { dimmed: 0, base: 1, lit: 2, cycle: 3, closure: 4 }
 
 /**
  * Arrowheads, in the four colours an edge can be. A dependency map's one
@@ -56,8 +72,7 @@ const EDGE_COLORS = {
 }
 
 const DEFAULT_EDGE_OPTIONS = {
-  type: 'smoothstep',
-  pathOptions: { borderRadius: 8 },
+  type: 'gutter',
   markerEnd: marker(EDGE_COLORS.base),
 }
 
@@ -72,17 +87,40 @@ const px = (value: number) => `${Math.round(value)}px` as `${number}px`
  * tall, the zoom column 26 wide, the detail panel 320 wide, and the toolbar
  * reflows with the window so its height is measured rather than assumed.
  */
-const fitPad = (headerHeight: number, panelOpen: boolean): FitViewOptions => ({
+const fitPad = (
+  headerHeight: number,
+  panelOpen: boolean,
+  noticesHeight: number,
+): FitViewOptions => ({
   padding: {
     top: px(headerHeight + 24),
-    bottom: px(174),
+    // 174 is the minimap plus breath, and it was the only thing reserved down
+    // here. The notice stack is allowed to grow to 38% of the viewport and
+    // reflows with its own content, so on a trimmed or cyclic graph fitView was
+    // framing nodes into the space the notices were about to occupy. Measured,
+    // for the same reason the toolbar's height is measured.
+    bottom: px(Math.max(174, noticesHeight + 24)),
+    // The rail is a static column outside this container, so the canvas's own
+    // left edge is still the zoom controls' edge and 50 is still correct.
     left: px(50),
     right: px(panelOpen ? 344 : 224),
   },
 })
 
 export function App() {
-  const [query] = useState<MapQuery>(queryFromLocation)
+  /**
+   * Derived from the router, and keyed on the href STRING.
+   *
+   * This is the sharpest edge in the whole migration and it is invisible in a
+   * screenshot. `readQuery` returns a fresh object every call, so a query
+   * derived without this memo would be a new object on every render, the
+   * subscribe effect below would tear down and re-open its EventSource every
+   * render, and `mapEvents()` opens an interval per connection server-side. With
+   * `?task=` in the URL, every one of those ticks re-runs the entire capsule
+   * pipeline. The page would look perfect and the daemon would be on fire.
+   */
+  const { href, params } = useRoute()
+  const query = useMemo<MapQuery>(() => readQuery(params), [href])
   const [payload, setPayload] = useState<MapPayload | null>(null)
   const [error, setError] = useState('')
   const [live, setLive] = useState(false)
@@ -98,7 +136,9 @@ export function App() {
 
   const scope = useCallback(
     (file: string) => {
-      window.location.href = `/ui/map${queryString({ ...query, target: file })}`
+      // A route change now, not a reload: the shell stays mounted, so scoping
+      // the map no longer costs a re-parse of the bundle.
+      navigate(`/ui/map${queryString({ ...query, target: file })}`)
     },
     [query],
   )
@@ -168,6 +208,7 @@ function Graph({
   // resize after that would throw away where they had chosen to be looking.
   const touched = useRef(false)
   const [headerHeight, setHeaderHeight] = useState(122)
+  const [noticesHeight, setNoticesHeight] = useState(0)
   const [hovered, setHovered] = useState<number | null>(null)
   const panelOpen = selected !== null
 
@@ -269,6 +310,17 @@ function Graph({
       if (closure.down.has(to) && (from === closure.anchor || closure.down.has(from))) return 'down'
       return 'dimmed'
     }
+    // Which lane in its column's gutter each edge turns in. Counted per column
+    // rather than per node, because the gutter belongs to the column: two
+    // different files leaving column 3 share the same 96px of empty canvas.
+    const laneOf = new Map<number, number>()
+    const nextLane = (id: number) => {
+      const column = byId.get(id)?.level ?? 0
+      const used = laneOf.get(column) ?? 0
+      laneOf.set(column, used + 1)
+      return used
+    }
+
     return payload.edges.map((edge) => {
       const base = {
         id: `${edge.from}-${edge.to}`,
@@ -277,6 +329,7 @@ function Graph({
         source: String(edge.from),
         target: String(edge.to),
         animated: false,
+        data: { lane: nextLane(edge.from) },
       }
       const inClosure = tier(edge)
       if (inClosure) {
@@ -285,7 +338,7 @@ function Graph({
           className: inClosure,
           // Above the node boxes, so the answer to "what does this touch" is
           // not half-hidden behind the things it touches.
-          zIndex: inClosure === 'dimmed' ? 0 : 1,
+          zIndex: inClosure === 'dimmed' ? EDGE_Z.dimmed : EDGE_Z.closure,
           markerEnd: marker(
             inClosure === 'up'
               ? EDGE_COLORS.up
@@ -295,11 +348,23 @@ function Graph({
           ),
         }
       }
-      if (edge.inCycle) return { ...base, className: 'cycle', markerEnd: marker(EDGE_COLORS.cycle) }
-      if (!visible(edge.from) && !visible(edge.to)) return { ...base, className: 'dimmed' }
+      if (edge.inCycle)
+        return {
+          ...base,
+          className: 'cycle',
+          zIndex: EDGE_Z.cycle,
+          markerEnd: marker(EDGE_COLORS.cycle),
+        }
+      if (!visible(edge.from) && !visible(edge.to))
+        return { ...base, className: 'dimmed', zIndex: EDGE_Z.dimmed }
       if (lit(edge.from) && lit(edge.to))
-        return { ...base, className: 'lit', markerEnd: marker(EDGE_COLORS.lit) }
-      return base
+        return {
+          ...base,
+          className: 'lit',
+          zIndex: EDGE_Z.lit,
+          markerEnd: marker(EDGE_COLORS.lit),
+        }
+      return { ...base, zIndex: EDGE_Z.base }
     })
   }, [payload, needle, closure])
 
@@ -309,8 +374,8 @@ function Graph({
   // Opening the panel is the same problem in miniature — it takes 320px of the
   // canvas away, so what was framed no longer is.
   useEffect(() => {
-    fitView({ ...fitPad(headerHeight, panelOpen), duration: 200 })
-  }, [fitView, payload.counts.files, headerHeight, panelOpen])
+    fitView({ ...fitPad(headerHeight, panelOpen, noticesHeight), duration: 200 })
+  }, [fitView, payload.counts.files, headerHeight, panelOpen, noticesHeight])
 
   /**
    * A window that got smaller leaves nodes past its edge with no scrollbar and
@@ -324,14 +389,14 @@ function Graph({
     const observer = new ResizeObserver(() => {
       if (touched.current) return
       window.clearTimeout(timer)
-      timer = window.setTimeout(() => fitView(fitPad(headerHeight, panelOpen)), 120)
+      timer = window.setTimeout(() => fitView(fitPad(headerHeight, panelOpen, noticesHeight)), 120)
     })
     observer.observe(node)
     return () => {
       observer.disconnect()
       window.clearTimeout(timer)
     }
-  }, [fitView, headerHeight, panelOpen])
+  }, [fitView, headerHeight, panelOpen, noticesHeight])
 
   return (
     <div ref={wrapper} className="relative h-full w-full">
@@ -339,6 +404,7 @@ function Graph({
         nodes={nodes}
         edges={edges}
         nodeTypes={NODE_TYPES}
+        edgeTypes={EDGE_TYPES}
         defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
         nodesDraggable={false}
         nodesConnectable={false}
@@ -356,7 +422,7 @@ function Graph({
         // open the file and zoom the canvas out from under the reader.
         zoomOnDoubleClick={false}
         fitView
-        fitViewOptions={fitPad(headerHeight, panelOpen)}
+        fitViewOptions={fitPad(headerHeight, panelOpen, noticesHeight)}
         // Programmatic transforms arrive with a null event; only a real one
         // means the reader took the view over.
         onMoveEnd={(event) => {
@@ -397,7 +463,7 @@ function Graph({
         live={live}
         onHeight={setHeaderHeight}
       />
-      <Notices payload={payload} query={query} />
+      <Notices payload={payload} query={query} onHeight={setNoticesHeight} />
       {selected && (
         <DetailPanel
           file={selected}
@@ -406,14 +472,6 @@ function Graph({
           onScope={onScope}
         />
       )}
-    </div>
-  )
-}
-
-function Centered({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex h-full w-full items-center justify-center p-8">
-      <div className="max-w-md text-center">{children}</div>
     </div>
   )
 }

@@ -67,10 +67,41 @@
     --edge-down: var(--group-3);
 
     --radius: 10px;
+
+    /*
+     * The stacking order, named once.
+     *
+     * Notices.tsx already carries a comment about the collision this replaces:
+     * a floating stack at a hand-written z-20 sat on top of React Flow's own
+     * controls at z-5 and made the zoom buttons unclickable in exactly the
+     * sessions — trimmed, cyclic, capsule — where getting around the graph
+     * matters most. With a fifth floating thing in the app, magic numbers stop
+     * being tractable.
+     *
+     * These are plain custom properties rather than an @theme namespace because
+     * Tailwind v4 has no z-index theme namespace to map them through: the
+     * utilities read them as `z-[var(--z-chrome)]`, which is still one table.
+     */
+    --z-canvas: 0;
+    --z-chrome: 20;
+    --z-panel: 30;
+    --z-rail: 40;
+    --z-overlay: 50;
   }
 
+  /*
+   * Dark, three ways, and in this order.
+   *
+   * `system` is the default and stays a media query — there is no JS theme
+   * store here and the map is read beside an editor in whatever theme that
+   * editor uses. The media block is guarded so an explicit light choice wins
+   * over a dark system, and the attribute blocks exist so `data-theme` on the
+   * root element can force either one: headless Chrome renders light by
+   * default, so without this there was no way to screenshot the dark palette
+   * at all.
+   */
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme='light']) {
       color-scheme: dark;
 
       --background: #08080a;
@@ -101,6 +132,44 @@
       --group-4: #8f7ad6;
       --group-5: #4f7fa8;
     }
+  }
+
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+
+    --background: #08080a;
+    --foreground: #ededef;
+
+    --rail: #0e0e11;
+    --panel: #1a1a1d;
+    --panel-hover: #232327;
+    --card: #141417;
+
+    --border: #2a2a2f;
+    --border-strong: #3a3a41;
+    --border-active: rgb(255 255 255 / 0.2);
+
+    --muted-foreground: #86868d;
+    --accent: #df5c25;
+    --accent-dim: #8a3a17;
+
+    --edge: #5a5a66;
+    --edge-strong: #a8a8b4;
+    --dots: #2a2a30;
+    --overlay: rgb(0 0 0 / 0.7);
+
+    --group-0: #5a5a66;
+    --group-1: #5b8def;
+    --group-2: #2ea8a0;
+    --group-3: #6fae5c;
+    --group-4: #8f7ad6;
+    --group-5: #4f7fa8;
+  }
+
+  /* Light is the bare `:root` block above; this only has to re-assert the
+     colour scheme so form controls and scrollbars follow the choice too. */
+  :root[data-theme='light'] {
+    color-scheme: light;
   }
 }
 
@@ -147,8 +216,28 @@
     color: var(--foreground);
     font-family: var(--font-sans);
     font-size: 14px;
+    /* Stated rather than left to the browser's 1.15. Four of the five pages are
+       now prose and path lists rather than chrome, and a line-height set for a
+       toolbar row is too tight to read a paragraph in. Every chrome size in
+       this tree is still a bracket literal, which is right — a chip is a
+       component, not text. */
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
+  }
+
+  /*
+   * `overflow: hidden` used to live on `body`, which was true while the app was
+   * one canvas and false the moment it had documents in it. It belongs to the
+   * canvas, so it lives on the canvas's own container.
+   */
+  .map-surface {
     overflow: hidden;
+  }
+
+  pre {
+    margin: 0;
+    white-space: pre;
+    tab-size: 2;
   }
 
   ::selection {
@@ -163,6 +252,28 @@
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+  }
+
+  /*
+   * A surface that is a column of rows rather than a block of text: it clips
+   * its own children so a sticky header inside it stays inside the rounded
+   * corner instead of painting over it.
+   */
+  .sheet {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sheet > header,
+  .sheet > summary {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--panel);
   }
 }
 
