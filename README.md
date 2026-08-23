@@ -77,13 +77,28 @@ toolchain. It still reaches no network — the daemon serves it off disk.
   writes nothing. `/ui/map/data` returns that payload as JSON for anything that
   is not a browser.
 
-  The UI has two checks of its own, both needing a built bundle and a running
-  daemon, which is why neither is part of `npm test`:
-  `npm --prefix ui run shots` renders the pages in headless Chrome and reports
-  the console beside each image, and `npm --prefix ui run check` asserts the
-  promises the pages make — no card clips its own content, nothing sits under
-  the chrome, edges carry direction, omission is stated, the filter dims rather
-  than hides, and no page reaches a host but this one.
+  The UI has two checks of its own: `npm --prefix ui run shots` renders the
+  pages in headless Chrome and reports the console beside each image, and
+  `npm --prefix ui run check` asserts the promises the pages make — no card
+  clips its own content, nothing sits under the chrome, edges carry direction,
+  omission is stated, the filter dims rather than hides, and no page reaches a
+  host but this one.
+
+## Verifying a change
+
+```bash
+npm test        # unit tests — no toolchain, no browser, no daemon
+npm run verify  # the above, plus the UI build and the render checks
+```
+
+`npm test` is the floor and stays dependency-free. `npm run verify` adds the
+stages that need a built bundle, a daemon and a browser; it starts what is
+missing and stops whatever it started.
+
+A stage that cannot run fails the run rather than being skipped quietly — a
+verify that reports a pass while silently omitting its browser stage is the
+same defect this project keeps finding in itself. `npm run verify -- --allow-skip`
+accepts the gap on a machine without Chrome, and still prints what was missed.
 
 ## Quick start
 

@@ -2,13 +2,18 @@
   "name": "vnodes",
   "version": "1.0.0",
   "description": "Local-first code-graph context engine for AI agents: dependency graph on disk, MCP tool catalog, token-budgeted context capsules, cross-session agent memory with staleness tracking. Zero dependencies, zero outbound network calls.",
-  "bin": { "vnodes": "bin/vnodes.js" },
+  "bin": {
+    "vnodes": "bin/vnodes.js"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
-    "ui:build": "npm --prefix ui ci && npm --prefix ui run build"
+    "ui:build": "npm --prefix ui ci && npm --prefix ui run build",
+    "verify": "node scripts/verify.mjs"
   },
   "main": "src/tools.js",
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=22.5"
+  },
   "license": "UNLICENSED",
   "private": true
 }
