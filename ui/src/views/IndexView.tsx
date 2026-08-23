@@ -248,6 +248,8 @@ export function IndexView() {
         />
       </div>
 
+      <Excluded excluded={composition.excluded} />
+
       <footer className="border-t border-border pt-3 text-[12px] leading-relaxed text-muted-foreground">
         Every list here is a slice and says what it is a slice of. Symbol and edge counts come from
         the same store the{' '}
@@ -310,5 +312,109 @@ function FileList({
 function H2({ children }: { children: React.ReactNode }) {
   return (
     <h2 className="mb-2 text-[11px] tracking-wide text-muted-foreground uppercase">{children}</h2>
+  )
+}
+
+
+/**
+ * What the index left out, and which rule file left it out.
+ *
+ * The counterpart to everything above it: a page that answers "what is in here"
+ * is not finished until it answers "and what is not". This is the view of the
+ * decision that once let 181 files of browser cache become 78% of an index
+ * while every status check reported healthy — the ignore line that fixed it took
+ * a minute, and the two commits it went unnoticed for were the expensive part.
+ *
+ * Each row names the rule FILE, not just that a rule exists: someone who
+ * disagrees with an exclusion needs to know which file to edit.
+ */
+function Excluded({ excluded }: { excluded: Composition['excluded'] }) {
+  if (!excluded) {
+    return (
+      <section className="border-t border-border pt-4">
+        <h2 className="mb-1.5 text-[11px] tracking-wide text-muted-foreground uppercase">excluded</h2>
+        <p className="text-[13px] text-muted-foreground">
+          This daemon did not report what it excluded. That is not the same as nothing being
+          excluded — it means this page cannot say.
+        </p>
+      </section>
+    )
+  }
+  if (excluded.error) {
+    return (
+      <section className="border-t border-border pt-4">
+        <h2 className="mb-1.5 text-[11px] tracking-wide text-muted-foreground uppercase">excluded</h2>
+        <p className="text-[13px] text-muted-foreground">
+          Reading the ignore rules failed: <code>{excluded.error}</code>
+        </p>
+      </section>
+    )
+  }
+
+  const subtrees = excluded.subtrees ?? []
+  const files = excluded.files ?? []
+  const bySource = Object.entries(excluded.by_source ?? {}).sort((a, b) => b[1] - a[1])
+
+  return (
+    <section className="border-t border-border pt-4">
+      <h2 className="mb-1.5 text-[11px] tracking-wide text-muted-foreground uppercase">
+        excluded — on disk, not in the index
+      </h2>
+      <p className="mb-3 max-w-3xl text-[13px] leading-relaxed text-muted-foreground">
+        Nothing here is in any capsule, any impact query or any answer an agent gives, on any
+        provider. Each row names the rule file that decided it, so a disagreement has somewhere to
+        go.
+      </p>
+
+      {bySource.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {bySource.map(([source, count]) => (
+            <span
+              key={source}
+              className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+            >
+              {source} <b className="text-foreground">{count}</b>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {subtrees.length + files.length === 0 ? (
+        <p className="text-[13px] text-muted-foreground">
+          Nothing on disk is excluded. Every file the parser recognises is indexed.
+        </p>
+      ) : (
+        <ul className="flex flex-col">
+          {[...subtrees, ...files].map((row) => (
+            <li
+              key={row.path}
+              className="flex items-baseline gap-3 border-b border-border py-1.5 last:border-0"
+            >
+              <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{row.path}</span>
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                {row.source}
+                {row.pattern && (
+                  <span className="opacity-70">
+                    {' · '}
+                    {row.pattern}
+                  </span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {excluded.truncated && (
+        <p className="mt-2 text-[12px] text-muted-foreground">
+          The walk stopped at its entry budget, so this list is partial — and says so rather than
+          reading as complete.
+        </p>
+      )}
+      <p className="mt-2 text-[12px] leading-relaxed text-muted-foreground">
+        An excluded directory is named once and not walked into. Counting every file under{' '}
+        <code>node_modules</code> costs more than the answer is worth.
+      </p>
+    </section>
   )
 }

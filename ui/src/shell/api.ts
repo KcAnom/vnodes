@@ -167,6 +167,18 @@ export type Composition = {
   list_cap?: number
   /** `.vnodesignore` lines the daemon would suggest. Shown, never applied. */
   ignore_suggestion?: string[]
+  /**
+   * What is on disk and deliberately not indexed, with the rule file that made
+   * the call. Null when the daemon could not compute it — which is not the same
+   * as nothing being excluded, and the page says so rather than showing zero.
+   */
+  excluded?: {
+    subtrees?: { path: string; source: string; pattern: string }[]
+    files?: { path: string; lang: string; source: string; pattern: string }[]
+    by_source?: Record<string, number>
+    truncated?: boolean
+    error?: string
+  } | null
 }
 
 /** GET /tools — used only to notice a view whose backing tool is not exposed. */

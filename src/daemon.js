@@ -157,7 +157,12 @@ function capsuleForUi(capsule, task, cfg) {
  * true sentence about a browser cache. Grouping on the first two path segments
  * is what makes `ui/.shots` its own row instead of a number hiding inside `ui`.
  */
-function composition(engDir) {
+/**
+ * `projectRoot` is optional so the store-only callers (and their tests) keep
+ * working; without it the page simply has no exclusions section rather than
+ * inventing an empty one, which would read as "nothing was excluded".
+ */
+function composition(engDir, projectRoot) {
   const { openStore } = require('./store');
   const db = openStore(engDir);
   const files = db.prepare('SELECT path, repo, lang, size FROM files').all();
@@ -194,9 +199,28 @@ function composition(engDir) {
   const noSymbols = files.filter(f => !symbols.get(f.path)).map(f => f.path);
   const noEdges = files.filter(f => !connected.has(f.path)).map(f => f.path);
 
+  // What is on disk and deliberately absent. The page that answers "what is in
+  // here" is not finished until it also answers "and what is not, and why".
+  let excluded = null;
+  if (projectRoot) {
+    try {
+      const { excludedSummary } = require('./exclusions');
+      const report = excludedSummary(projectRoot);
+      excluded = {
+        subtrees: report.subtrees,
+        files: report.files,
+        by_source: report.by_source,
+        truncated: report.truncated,
+      };
+    } catch (e) {
+      excluded = { error: e.message };
+    }
+  }
+
   return {
     total_files: files.length,
     total_bytes: files.reduce((a, f) => a + Number(f.size || 0), 0),
+    excluded,
     by_dir: byDir.slice(0, 12).map(({ inert, ...row }) => ({ ...row, inert_files: inert })),
     by_dir_shown: Math.min(12, byDir.length),
     by_dir_total: byDir.length,
@@ -262,7 +286,7 @@ function uiApi(pathname, q, projectRoot, cfg, send) {
       ? send(200, { query, results: searchMemory(engDir, query, { limit }), counts })
       : send(200, { observations: sessionContext(engDir, { limit }), counts });
   }
-  if (pathname === '/ui/api/composition') return send(200, composition(engDir));
+  if (pathname === '/ui/api/composition') return send(200, composition(engDir, projectRoot));
   return send(404, { error: 'no such api route', api: UI_API_ROUTES });
 }
 
