@@ -41,7 +41,10 @@ function mapView(projectRoot, engDir, cfg, query = {}) {
     depth,
     repo,
     maxNodes,
-    pin: [...focus, ...supporters],
+    // Split, not merged: if the capsule outgrows the map's node budget the
+    // pivots are the last thing to go, and the skeletons go before them.
+    pin: [...focus],
+    prefer: [...supporters],
   });
 
   // Absent from the query, box size is the model's call (it scales with node

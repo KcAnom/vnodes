@@ -50,8 +50,11 @@ function neighborhood(db, roots, depth) {
  * connected files are the ones a map is for. Trimming is always reported in
  * `dropped`, never silent: a picture that quietly omits 900 files reads as a
  * complete picture of a small project.
+ *
+ * `pin` and `prefer` both anchor the walk; they differ only when the slice is
+ * too big to draw. See the trim below for the order and why it has to exist.
  */
-function subgraph(engDir, { target = '', depth = 2, repo = '', maxNodes = 150, pin = [] } = {}) {
+function subgraph(engDir, { target = '', depth = 2, repo = '', maxNodes = 150, pin = [], prefer = [] } = {}) {
   const db = openStore(engDir);
   try {
     const totalFiles = db.prepare('SELECT COUNT(*) c FROM files').get().c;
@@ -66,10 +69,10 @@ function subgraph(engDir, { target = '', depth = 2, repo = '', maxNodes = 150, p
         return { files: [], edges: [], roots: [], total_files: totalFiles, dropped: 0, target, unresolved: true };
       }
     }
-    // Pinned files (a capsule's pivots) anchor the slice just like a target
-    // does — a map of a capsule that trimmed away the capsule's own files
-    // would be a map of something else.
-    const anchors = [...new Set([...roots, ...pin])];
+    // Pinned files (a capsule's pivots) and preferred ones (its skeletons)
+    // anchor the slice just like a target does — a map of a capsule that
+    // trimmed away the capsule's own files would be a map of something else.
+    const anchors = [...new Set([...roots, ...pin, ...prefer])];
     const keep = anchors.length ? neighborhood(db, anchors, depth) : null;
 
     const degree = new Map();
@@ -84,13 +87,20 @@ function subgraph(engDir, { target = '', depth = 2, repo = '', maxNodes = 150, p
 
     const considered = files.length;
     if (files.length > maxNodes) {
-      // Anchors survive the trim unconditionally — dropping the file the map
-      // was asked about would answer a different question than the one posed.
-      const anchorSet = new Set(anchors);
+      // Anchors survive the trim ahead of everything else — dropping the file
+      // the map was asked about would answer a different question than the one
+      // posed. Ranked among themselves, because a capsule can be larger than
+      // `maxNodes` on its own: with every candidate an anchor, one flag is no
+      // tiebreak at all and degree decides, which trades a zero-degree pivot
+      // for a well-connected skeleton and drops the files the map exists to
+      // show. Explicit target first, then pivots, then skeletons.
+      const rootSet = new Set(roots);
+      const pinSet = new Set(pin);
+      const preferSet = new Set(prefer);
+      const rank = p => (rootSet.has(p) ? 3 : pinSet.has(p) ? 2 : preferSet.has(p) ? 1 : 0);
       files.sort((a, b) => {
-        const ra = anchorSet.has(a.path) ? 1 : 0;
-        const rb = anchorSet.has(b.path) ? 1 : 0;
-        if (ra !== rb) return rb - ra;
+        const byRank = rank(b.path) - rank(a.path);
+        if (byRank) return byRank;
         return (degree.get(b.path) || 0) - (degree.get(a.path) || 0);
       });
       files = files.slice(0, maxNodes);
