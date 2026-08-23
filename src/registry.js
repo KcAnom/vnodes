@@ -605,7 +605,92 @@ function forget(id) {
   };
 }
 
+
+/**
+ * Directories a scan for knowledge bases has no business walking.
+ *
+ * Two kinds: places that hold no source (a macOS Library is hundreds of
+ * thousands of files and zero projects), and places that hold other people's
+ * source (node_modules, vendor, Pods). Skipping them is what keeps a scan of a
+ * home directory a few thousand statSync calls instead of the half-million-file
+ * walk that produced the accidental $HOME index in the first place.
+ *
+ * Downloads is deliberately NOT here: repositories genuinely live there.
+ */
+const DISCOVER_SKIP = new Set([
+  'node_modules', '.git', '.svn', '.hg', '.vnodes', 'vendor', 'Pods', 'DerivedData',
+  'target', 'dist', 'build', 'out', '.next', '.nuxt', '.expo', '__pycache__', '.venv',
+  'venv', '.tox', '.gradle', '.m2', '.cargo', '.rustup', '.npm', '.pnpm-store', '.yarn',
+  '.cache', '.local', '.Trash', 'Library', 'Applications', 'Pictures', 'Music', 'Movies',
+  '.docker', '.orbstack', '.colima', 'go',
+]);
+
+/**
+ * Find knowledge bases already on disk and register the ones that are new.
+ *
+ * Registration is otherwise a side effect of indexing, which means a project
+ * indexed before this registry existed — or from an agent on another day — is
+ * invisible until something happens to reindex it. That is most of them.
+ *
+ * A knowledge base announces itself with one file, `<dir>/.vnodes/index.db`, so
+ * the walk costs one statSync per DIRECTORY rather than per file. Bounded three
+ * ways — depth, entries and milliseconds — and it reports when a bound stopped
+ * it, because a scan that quietly gave up looks exactly like a machine with
+ * nothing on it.
+ *
+ * It registers; it never indexes, never opens a project store, and never
+ * touches a project directory.
+ */
+function discover({ roots, depth, cap, ms, cfg, writer = 'discover' } = {}) {
+  const conf = registryCfg(cfg);
+  const maxDepth = depth ?? conf.discover_depth ?? 4;
+  const maxEntries = cap ?? conf.discover_cap ?? 20000;
+  const deadline = Date.now() + (ms ?? (conf.discover_ms ?? 5000));
+  const startRoots = (roots && roots.length ? roots : [os.homedir()])
+    .map(r => { try { return fs.realpathSync(r); } catch { return null; } })
+    .filter(Boolean);
+
+  const report = {
+    roots: startRoots, scanned: 0, found: [], registered: [], already: [],
+    truncated: false, stopped_by: null, ms: 0,
+  };
+  const started = Date.now();
+  const seen = new Set();
+
+  const walk = (dir, level) => {
+    if (report.truncated) return;
+    if (report.scanned >= maxEntries) { report.truncated = true; report.stopped_by = 'entries'; return; }
+    if (Date.now() > deadline) { report.truncated = true; report.stopped_by = 'time'; return; }
+
+    // One stat per directory is the whole search: a knowledge base is exactly a
+    // directory with this file under it.
+    if (fs.existsSync(path.join(dir, '.vnodes', 'index.db')) && !seen.has(dir)) {
+      seen.add(dir);
+      report.found.push(dir);
+      const result = ensureEntry(dir, writer, { cfg });
+      if (result?.written) report.registered.push({ id: result.id, path: dir });
+      else if (result) report.already.push({ id: result.id, path: dir });
+    }
+    if (level >= maxDepth) return;
+
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      if (DISCOVER_SKIP.has(entry.name)) continue;
+      report.scanned++;
+      walk(path.join(dir, entry.name), level + 1);
+      if (report.truncated) return;
+    }
+  };
+
+  for (const root of startRoots) walk(root, 0);
+  report.ms = Date.now() - started;
+  return report;
+}
+
 module.exports = {
   registryDir, kbId, idForPath, recordIndex, ensureEntry, recordAgent,
   listKbs, resolveKb, hide, show, forget, registryCfg, agentSlug, engineDbBytes, ID_RE,
+  discover, DISCOVER_SKIP,
 };

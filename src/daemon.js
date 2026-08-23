@@ -462,6 +462,8 @@ function claimIndexing(projectRoot, port) {
 function serve(projectRoot) {
   const hub = !projectRoot;
   const cfg = loadConfig(projectRoot);
+  /** The last on-disk scan for knowledge bases, or null if none has run. */
+  let lastDiscovery = null;
   const port = cfg.mcp.port;
   // The hub has no .vnodes/logs to write into, and path.join(null, …) throws
   // inside a request listener, which takes the whole daemon down.
@@ -530,7 +532,9 @@ function serve(projectRoot) {
         }
       }
       if (url.pathname === '/ui/api/kbs') {
-        return send(200, listKbs({ launchRoot: projectRoot, cfg }));
+        // The scan is reported with the list because a short list and a scan
+        // that gave up look identical otherwise, and one of them is a bug.
+        return send(200, { ...listKbs({ launchRoot: projectRoot, cfg }), discovery: lastDiscovery });
       }
 
       if (scoped) {
@@ -665,6 +669,23 @@ function serve(projectRoot) {
     dlog(`daemon started pid=${process.pid} port=${actualPort} owner=${owner}`);
     console.log(`vnodes daemon running on http://127.0.0.1:${actualPort} (status: /status, ui: ${hub ? '/ui/bases' : '/ui'})`);
     if (hub) console.log('hub mode: no launch project — /ui is the knowledge-base picker; scoped pages need ?kb=<id>');
+    // A hub's whole job is the list, and a list that only fills as projects
+    // happen to be reindexed starts empty on a machine full of them. Deferred
+    // off the listen callback so the port answers immediately: the scan is a
+    // few thousand statSync calls and the picker must not wait on it.
+    if (hub) {
+      setTimeout(() => {
+        try {
+          const { discover } = require('./registry');
+          lastDiscovery = discover({ cfg });
+          console.log(`discovered ${lastDiscovery.found.length} knowledge base(s) in ${lastDiscovery.scanned} directories` +
+            (lastDiscovery.registered.length ? `, ${lastDiscovery.registered.length} newly registered` : '') +
+            (lastDiscovery.truncated ? ` (scan stopped early: ${lastDiscovery.stopped_by})` : ''));
+        } catch (e) {
+          lastDiscovery = { error: e.message };
+        }
+      }, 50).unref?.();
+    }
     else if (!owner) console.log('another daemon owns indexing for this project; serving reads only');
   });
   const claimTimer = setInterval(takeIndexing, 5000);

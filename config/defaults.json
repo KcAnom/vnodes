@@ -1,5 +1,5 @@
 {
-  "_comment": "vnodes config defaults. Every value here is a snapshot parameter from the blueprint config-schema (captured 2026-07-31). Configurable — never hardcoded in source. Override per-project in .vnodes/config.json or via VNODES_* env vars.",
+  "_comment": "vnodes config defaults. Every value here is a snapshot parameter from the blueprint config-schema (captured 2026-07-31). Configurable \u2014 never hardcoded in source. Override per-project in .vnodes/config.json or via VNODES_* env vars.",
   "capsule": {
     "max_tokens": 8000,
     "savings_baseline": "65-70%",
@@ -25,13 +25,16 @@
     "level": "warn"
   },
   "registry": {
-    "_comment": "The knowledge-base registry at $VNODES_HOME/registry, $XDG_CONFIG_HOME/vnodes/registry or ~/.config/vnodes/registry. write_interval_s throttles the snapshot an index run writes; scan_cap bounds the readdir; list_cap bounds the picker's rows; tmp_sweep_s is how long an orphaned atomic-write temp file survives; the two oversize values are where whole-index work (composition, capsule, an unscoped map) is refused with 413 instead of blocking the daemon's only event loop.",
+    "_comment": "The knowledge-base registry at $VNODES_HOME/registry, $XDG_CONFIG_HOME/vnodes/registry or ~/.config/vnodes/registry. write_interval_s throttles the snapshot an index run writes; scan_cap bounds the readdir; list_cap bounds the picker's rows; tmp_sweep_s is how long an orphaned atomic-write temp file survives; the two oversize values are where whole-index work (composition, capsule, an unscoped map) is refused with 413 instead of blocking the daemon's only event loop. discover_depth/discover_cap/discover_ms bound the scan that finds knowledge bases already on disk: it costs one statSync per directory, and a bound that stops it is always reported rather than looking like a machine with nothing on it.",
     "write_interval_s": 60,
     "scan_cap": 500,
     "list_cap": 200,
     "tmp_sweep_s": 3600,
     "oversize_files": 50000,
-    "oversize_db_mb": 512
+    "oversize_db_mb": 512,
+    "discover_depth": 4,
+    "discover_cap": 20000,
+    "discover_ms": 5000
   },
   "ui": {
     "sidebar_refresh_s": 10,

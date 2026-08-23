@@ -169,6 +169,19 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
         for (const n of l.notes) out(`note: ${n}`);
         break;
       }
+      if (sub === 'discover') {
+        // Registration is otherwise a side effect of indexing, so every project
+        // indexed before this registry existed is invisible until something
+        // reindexes it. This finds them without touching one.
+        const roots = args.length ? args.map(a => path.resolve(a)) : [];
+        const r = reg.discover({ roots, cfg: loadConfig(projectRoot) });
+        out(`scanned ${r.scanned} directories under ${r.roots.join(', ')} in ${r.ms}ms`);
+        if (r.truncated) out(`stopped early (${r.stopped_by}) — pass a narrower path, or raise registry.discover_${r.stopped_by === 'time' ? 'ms' : 'cap'}`);
+        if (!r.found.length) out('found no knowledge bases — a project becomes one by being indexed: cd <project> && vnodes index');
+        for (const k of r.registered) out(`registered ${k.id}  ${k.path}`);
+        for (const k of r.already) out(`already     ${k.id}  ${k.path}`);
+        break;
+      }
       if (sub === 'register') {
         const target = path.resolve(args[0] || flags.project || process.cwd());
         if (!fs.existsSync(path.join(target, '.vnodes', 'index.db'))) {
@@ -304,9 +317,10 @@ usage: vnodes <command> [args] [--flags]
   flow <from> <to>            dependency path between two files/symbols
   memory [recent|search <q>|save <text> [--file f] [--symbol s]]
   workspace [setup --name N --repos alias=path,...]
-  kb [list|register [path]|forget <id>|hide <id>|show <id>]
+  kb [list|discover [path...]|register [path]|forget <id>|hide <id>|show <id>]
                               the knowledge-base registry: every project this machine has indexed.
-                              a project is registered by INDEXING it; forget removes the row and
+                              a project is registered by INDEXING it; discover finds ones already on
+                              disk and registers them without indexing anything; forget removes the row and
                               prints (never runs) the rm -rf that would remove the index itself
   setup [--detect] [--only claude-code,cursor] [--personal]
   daemon [start|stop|status] [--hub]

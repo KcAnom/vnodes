@@ -417,3 +417,76 @@ test('a hub daemon owns no project and refuses to guess one', async () => {
     delete process.env.VNODES_PORT;
   }
 });
+
+// ------------------------------------------------- finding what is already there
+
+const { discover, DISCOVER_SKIP } = require('../src/registry');
+
+/** A tree of empty directories, with a fake knowledge base wherever asked. */
+function tree(spec) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-discover-'));
+  for (const [rel, isKb] of Object.entries(spec)) {
+    const dir = path.join(root, rel);
+    fs.mkdirSync(dir, { recursive: true });
+    if (isKb) {
+      fs.mkdirSync(path.join(dir, '.vnodes'), { recursive: true });
+      fs.writeFileSync(path.join(dir, '.vnodes', 'index.db'), '');
+    }
+  }
+  return root;
+}
+
+test('discovery finds a knowledge base nobody reindexed', () => {
+  const root = tree({ 'code/app': true, 'code/notes': false });
+  const report = discover({ roots: [root] });
+  assert.strictEqual(report.found.length, 1);
+  assert.ok(report.found[0].endsWith('code/app'));
+  assert.strictEqual(report.registered.length, 1, 'a base found for the first time is registered');
+  assert.strictEqual(discover({ roots: [root] }).registered.length, 0, 'and not registered twice');
+});
+
+test('discovery registers without indexing anything', () => {
+  const root = tree({ 'code/app': true, 'code/plain': false });
+  discover({ roots: [root] });
+  assert.ok(!fs.existsSync(path.join(root, 'code/plain', '.vnodes')),
+    'a directory that was not a knowledge base must not become one by being looked at');
+  // The fake index.db is still the empty file the fixture wrote.
+  assert.strictEqual(fs.readFileSync(path.join(root, 'code/app', '.vnodes', 'index.db'), 'utf8'), '');
+});
+
+test('discovery does not walk into other people\'s source', () => {
+  const root = tree({ 'app': true, 'app/node_modules/dep': true, 'app/vendor/lib': true });
+  const report = discover({ roots: [root] });
+  assert.strictEqual(report.found.length, 1, 'a dependency with its own index is not this machine\'s knowledge base');
+  assert.ok(DISCOVER_SKIP.has('node_modules') && DISCOVER_SKIP.has('vendor'));
+});
+
+test('depth bounds the walk, and the bound is a real one', () => {
+  const root = tree({ 'a/b/c/d/e/deep': true });
+  assert.strictEqual(discover({ roots: [root], depth: 2 }).found.length, 0);
+  assert.strictEqual(discover({ roots: [root], depth: 8 }).found.length, 1);
+});
+
+test('a scan stopped by its own budget says so', () => {
+  const spec = {};
+  for (let i = 0; i < 60; i++) spec[`dir${i}/sub`] = false;
+  const root = tree(spec);
+  const report = discover({ roots: [root], cap: 5 });
+  assert.strictEqual(report.truncated, true, 'a scan that gave up must not look like a machine with nothing on it');
+  assert.strictEqual(report.stopped_by, 'entries');
+});
+
+test('a complete scan reports that it was complete', () => {
+  const root = tree({ 'code/app': true });
+  const report = discover({ roots: [root] });
+  assert.strictEqual(report.truncated, false);
+  assert.strictEqual(report.stopped_by, null);
+  assert.ok(report.ms >= 0 && report.scanned > 0);
+});
+
+test('a symlinked directory is not followed', () => {
+  const root = tree({ 'real/app': true, 'links': false });
+  fs.symlinkSync(path.join(root, 'real'), path.join(root, 'links', 'loop'), 'dir');
+  const report = discover({ roots: [root] });
+  assert.strictEqual(report.found.length, 1, 'following symlinks turns a scan into an unbounded walk');
+});
