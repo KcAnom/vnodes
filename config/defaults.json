@@ -25,7 +25,7 @@
     "level": "warn"
   },
   "registry": {
-    "_comment": "The knowledge-base registry at $VNODES_HOME/registry, $XDG_CONFIG_HOME/vnodes/registry or ~/.config/vnodes/registry. write_interval_s throttles the snapshot an index run writes; scan_cap bounds the readdir; list_cap bounds the picker's rows; tmp_sweep_s is how long an orphaned atomic-write temp file survives; the two oversize values are where whole-index work (composition, capsule, an unscoped map) is refused with 413 instead of blocking the daemon's only event loop. discover_depth/discover_cap/discover_ms bound the scan that finds knowledge bases already on disk: it costs one statSync per directory, and a bound that stops it is always reported rather than looking like a machine with nothing on it.",
+    "_comment": "The knowledge-base registry at $VNODES_HOME/registry, $XDG_CONFIG_HOME/vnodes/registry or ~/.config/vnodes/registry. write_interval_s throttles the snapshot an index run writes; scan_cap bounds the readdir; list_cap bounds the picker's rows; tmp_sweep_s is how long an orphaned atomic-write temp file survives; the two oversize values are where whole-index work (composition, capsule, an unscoped map) is refused with 413 instead of blocking the daemon's only event loop. discover_depth/discover_cap/discover_ms bound the scan (the hub runs it in the background off the listen callback, so the budget is generous: a home directory took 12,810 directories and six seconds on a cold cache, and a scan cut short reports one fewer knowledge base than exists) that finds knowledge bases already on disk: it costs one statSync per directory, and a bound that stops it is always reported rather than looking like a machine with nothing on it.",
     "write_interval_s": 60,
     "scan_cap": 500,
     "list_cap": 200,
@@ -34,7 +34,7 @@
     "oversize_db_mb": 512,
     "discover_depth": 4,
     "discover_cap": 20000,
-    "discover_ms": 5000
+    "discover_ms": 20000
   },
   "ui": {
     "sidebar_refresh_s": 10,

@@ -87,6 +87,24 @@ export type KbAgent = {
  * prints what is present and says what is not; it never renders a zero it was
  * not given.
  */
+/**
+ * The on-disk scan that finds knowledge bases nobody reindexed.
+ *
+ * Reported beside the list because a short list and a scan that gave up look
+ * identical from the outside, and one of them means a knowledge base is missing
+ * from this page.
+ */
+export type KbDiscovery = {
+  roots?: string[]
+  scanned?: number
+  found?: string[]
+  registered?: { id: string; path: string }[]
+  truncated?: boolean
+  stopped_by?: 'entries' | 'time' | null
+  ms?: number
+  error?: string
+}
+
 export type KbRow = {
   id: string
   name: string
@@ -130,6 +148,8 @@ export type KbList = {
   scan_capped: boolean
   shown: number
   hidden_count: number
+  /** The last on-disk scan, when the daemon has run one. */
+  discovery?: KbDiscovery | null
   total_db_bytes: number
   kbs: KbRow[]
   /** Whatever the server withheld and why. Printed in the footer, always. */

@@ -36,7 +36,7 @@
  */
 import { useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDownUp, Home, Library } from 'lucide-react'
-import type { KbRow } from '../shell/api'
+import type { KbDiscovery, KbRow } from '../shell/api'
 import { Centered } from '../shell/Centered'
 import { Copyable } from '../shell/Copyable'
 import { Link } from '../shell/route'
@@ -160,6 +160,7 @@ export function Bases() {
         capped={kbs.scan_capped}
         dir={kbs.registry_dir}
         notes={kbs.notes}
+        discovery={kbs.discovery}
       />
     </div>
   )
@@ -375,6 +376,7 @@ function Footer({
   capped,
   dir,
   notes,
+  discovery,
 }: {
   hidden: number
   shown: number
@@ -382,6 +384,7 @@ function Footer({
   capped: boolean
   dir: string
   notes?: string[]
+  discovery?: KbDiscovery | null
 }) {
   return (
     <div className="flex flex-col gap-1 text-[11px] text-muted-foreground">
@@ -399,6 +402,7 @@ function Footer({
           may be more on disk than this page can see.
         </p>
       )}
+      <DiscoveryLine discovery={discovery} />
       {notes?.map((note) => (
         <p key={note}>{note}</p>
       ))}
@@ -450,5 +454,41 @@ function RegistryUnreadable({ detail }: { detail: string }) {
         show the project this daemon was started in.
       </p>
     </Centered>
+  )
+}
+
+/**
+ * What the on-disk scan found, and whether it finished.
+ *
+ * A knowledge base is registered when it is indexed, so one indexed before this
+ * registry existed is invisible until a scan finds it. The scan is bounded, and
+ * a bound that stops it means this page is listing fewer knowledge bases than
+ * the machine has — which is indistinguishable from a machine with fewer, and
+ * so has to be said out loud.
+ */
+function DiscoveryLine({ discovery }: { discovery?: KbDiscovery | null }) {
+  if (!discovery) return null
+  if (discovery.error) {
+    return <p className="text-accent">the scan for knowledge bases failed: {discovery.error}</p>
+  }
+  const scanned = discovery.scanned ?? 0
+  const found = discovery.found?.length ?? 0
+  const where = (discovery.roots ?? []).map(collapse).join(', ')
+  if (!discovery.truncated) {
+    return (
+      <p>
+        scanned {count(scanned)} directories under {where || 'this machine'} and found {count(found)}
+        {found === 1 ? ' knowledge base' : ' knowledge bases'}.
+      </p>
+    )
+  }
+  return (
+    <p className="text-accent">
+      the scan stopped early after {count(scanned)} directories
+      {discovery.stopped_by === 'time' ? ' (out of time)' : ' (out of its entry budget)'} — there
+      may be knowledge bases on this machine that are not listed above. Scan a narrower path with{' '}
+      <code>vnodes kb discover ~/code</code>, or raise{' '}
+      <code>registry.discover_{discovery.stopped_by === 'time' ? 'ms' : 'cap'}</code>.
+    </p>
   )
 }
