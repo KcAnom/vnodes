@@ -36,17 +36,41 @@
     --accent: #d1521d;
     --accent-dim: #b0461a;
 
-    --edge: #c8c8d0;
-    --edge-strong: #6b6b73;
-    --dots: #cfcfd6;
+    /*
+     * An edge and the dot grid must not be the same colour: the grid is texture
+     * and an edge is a fact. These clear WCAG 2.1 SC 1.4.11's 3:1 floor against
+     * the canvas, which a 1px hairline in the grid's own grey did not.
+     */
+    --edge: #8b8b99;
+    --edge-strong: #55555e;
+    --dots: #dcdce2;
     --overlay: rgb(0 0 0 / 0.35);
     --selection-foreground: #fff;
+
+    /*
+     * One colour per top-level directory, worn as a rail down the left of a
+     * node. Deliberately no orange and no red: those two already mean "in the
+     * capsule" and "in a cycle", and a palette that spends them on directory
+     * identity would leave the two marks that carry urgency indistinguishable
+     * from ordinary membership. --group-0 is the muted fallback for anything
+     * the ramp does not name.
+     */
+    --group-0: #a8a8b4;
+    --group-1: #3b6fd0;
+    --group-2: #1c8a84;
+    --group-3: #4f8c40;
+    --group-4: #6f5cbd;
+    --group-5: #3d6a8f;
+
+    /* The two halves of a selection's closure: what it needs, what needs it. */
+    --edge-up: var(--group-1);
+    --edge-down: var(--group-3);
 
     --radius: 10px;
   }
 
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme='light']) {
+    :root {
       color-scheme: dark;
 
       --background: #08080a;
@@ -65,40 +89,18 @@
       --accent: #df5c25;
       --accent-dim: #8a3a17;
 
-      --edge: #33333a;
-      --edge-strong: #86868d;
-      --dots: #33333a;
+      --edge: #5a5a66;
+      --edge-strong: #a8a8b4;
+      --dots: #2a2a30;
       --overlay: rgb(0 0 0 / 0.7);
+
+      --group-0: #5a5a66;
+      --group-1: #5b8def;
+      --group-2: #2ea8a0;
+      --group-3: #6fae5c;
+      --group-4: #8f7ad6;
+      --group-5: #4f7fa8;
     }
-  }
-
-  [data-theme='dark'] {
-    color-scheme: dark;
-
-    --background: #08080a;
-    --foreground: #ededef;
-
-    --rail: #0e0e11;
-    --panel: #1a1a1d;
-    --panel-hover: #232327;
-    --card: #141417;
-
-    --border: #2a2a2f;
-    --border-strong: #3a3a41;
-    --border-active: rgb(255 255 255 / 0.2);
-
-    --muted-foreground: #86868d;
-    --accent: #df5c25;
-    --accent-dim: #8a3a17;
-
-    --edge: #33333a;
-    --edge-strong: #86868d;
-    --dots: #33333a;
-    --overlay: rgb(0 0 0 / 0.7);
-  }
-
-  [data-theme='light'] {
-    color-scheme: light;
   }
 }
 
@@ -115,6 +117,10 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-dim: var(--accent-dim);
+  /* Utilities too, so the legend's swatch and the thing it stands for are one
+     colour rather than two that drift apart. */
+  --color-edge: var(--edge);
+  --color-edge-strong: var(--edge-strong);
   --color-overlay: var(--overlay);
 
   --radius-base: var(--radius);
@@ -160,11 +166,23 @@
   }
 }
 
-/* React Flow ships a light theme by default; these follow the tokens instead. */
+/*
+ * React Flow ships a light theme by default; these follow the tokens instead.
+ * `colorMode="system"` alone only swaps React Flow's own greys for its darker
+ * greys — it never reaches the map's palette — so the chrome is pinned here.
+ */
 .react-flow {
   --xy-background-color: var(--background);
   --xy-edge-stroke-default: var(--edge);
   --xy-edge-stroke-selected-default: var(--edge-strong);
+  /* A hairline reads as texture at this density; 1.5 reads as a wire. */
+  --xy-edge-stroke-width: 1.5;
+
+  --xy-controls-button-background-color: var(--panel);
+  --xy-controls-button-background-color-hover: var(--panel-hover);
+  --xy-controls-button-color: var(--foreground);
+  --xy-controls-button-border-color: var(--border);
+  --xy-minimap-background-color: var(--panel);
 }
 
 .react-flow__node {
@@ -183,6 +201,18 @@
   display: none;
 }
 
+/*
+ * The selection's closure, split in two because "what this needs" and "what
+ * needs this" are different questions and one colour cannot answer both.
+ */
+.react-flow__edge.up .react-flow__edge-path {
+  stroke: var(--edge-up);
+}
+
+.react-flow__edge.down .react-flow__edge-path {
+  stroke: var(--edge-down);
+}
+
 /* An edge inside an import cycle. The one other place red is used. */
 .react-flow__edge.cycle .react-flow__edge-path {
   stroke: color-mix(in oklab, red 55%, var(--edge-strong));
@@ -193,7 +223,9 @@
   stroke: var(--accent);
 }
 
-.react-flow__edge.dimmed .react-flow__edge-path {
+/* On the group, not the path: an arrowhead is painted as part of the edge, and
+   a receding edge with a full-strength head still reads as a live one. */
+.react-flow__edge.dimmed {
   opacity: 0.15;
 }
 

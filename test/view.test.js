@@ -409,3 +409,154 @@ test('the bundle is served with the type a browser needs to run it', () => {
   assert.ok(js.body.length > 0);
   assert.strictEqual(readAsset('map.css').type, 'text/css; charset=utf-8');
 });
+
+// ------------------------------------------------- geometry as a DOM contract
+//
+// The header above says box sizes are left untested because they were the part
+// being replaced. They were replaced — by a React client whose node component
+// pins itself to a number this file declares, with no compiler between the two
+// halves. That is a contract, not a style choice, and the last time it went
+// unpinned the two sides disagreed by 15.25px and clipped 44 of 49 boxes.
+
+test('node height is one declared number, the same in both densities', () => {
+  const { geometry, NODE_HEIGHT } = require('../src/view/model');
+  // The other half of this contract is ui/src/kit/NodeShell.tsx: h-[49px]
+  // header + h-[31px] body + 1px border top and bottom.
+  assert.strictEqual(NODE_HEIGHT, 82);
+  assert.strictEqual(geometry(true).nodeHeight, 82, 'compact may narrow a box, never shorten it');
+  assert.strictEqual(geometry(false).nodeHeight, 82);
+  const root = chainFixture();
+  const view = mapView(root, eng(root), loadConfig(root), {});
+  assert.strictEqual(view.nodeHeight, 82, 'what the page is handed matches what the DOM renders');
+  assert.strictEqual(view.geom.nodeHeight, 82);
+});
+
+test('geometry carries no typography the DOM does not implement', () => {
+  const { geometry } = require('../src/view/model');
+  assert.deepStrictEqual(Object.keys(geometry(false)).sort(),
+    ['colGap', 'compact', 'margin', 'maxRows', 'nodeHeight', 'nodeWidth', 'rowGap']);
+});
+
+// ----------------------------------------------------------- the content filter
+
+/** One code file, one document, one config — three languages, one of them code. */
+function mixedFixture() {
+  return fixture({
+    'src/a.ts': 'export function a() { return 1; }\n',
+    'docs/notes.md': '# Notes\n\nSome prose.\n',
+    'config/x.json': '{"name":"x"}\n',
+  });
+}
+
+test('the map draws code by default and says what it withheld', () => {
+  const root = mixedFixture();
+  const slice = subgraph(eng(root), {});
+  assert.deepStrictEqual(paths(slice), ['src/a.ts']);
+  assert.strictEqual(slice.show, 'code');
+  assert.strictEqual(slice.filtered.count, 2, 'a filtered file is never silently gone');
+  assert.deepStrictEqual(slice.filtered.langs, { markdown: 1, json: 1 });
+});
+
+test('show:all draws the documents too, and reports nothing filtered', () => {
+  const root = mixedFixture();
+  const slice = subgraph(eng(root), { show: 'all' });
+  assert.strictEqual(slice.files.length, 3);
+  assert.strictEqual(slice.show, 'all');
+  assert.deepStrictEqual(slice.filtered, { count: 0, langs: {} });
+});
+
+test('the filter is by language, not by degree: isolated code still draws', () => {
+  const root = chainFixture();
+  const slice = subgraph(eng(root), {});
+  assert.ok(paths(slice).includes('src/lonely.ts'), 'a zero-degree rule would delete this');
+  assert.strictEqual(slice.filtered.count, 0, 'a code-only project filters nothing');
+});
+
+// -------------------------------------------------------------- the path scope
+
+/** src/ imports itself and is imported from outside — one edge each way. */
+function scopedFixture() {
+  return fixture({
+    'src/core.ts': 'export function core() { return 1; }\n',
+    'src/edge.ts': 'import { core } from "./core";\nimport { helper } from "../lib/helper";\nexport function edge() { return core() + helper(); }\n',
+    'lib/helper.ts': 'export function helper() { return 2; }\n',
+    'app/main.ts': 'import { edge } from "../src/edge";\nexport function main() { return edge(); }\n',
+  });
+}
+
+test('a path scope draws the subtree whole, not a neighbourhood of it', () => {
+  const root = scopedFixture();
+  const slice = subgraph(eng(root), { path: 'src' });
+  assert.deepStrictEqual(paths(slice), ['src/core.ts', 'src/edge.ts']);
+  assert.strictEqual(slice.path, 'src');
+  for (const e of slice.edges) {
+    assert.ok(e.src.startsWith('src/') && e.dst.startsWith('src/'), 'both endpoints are inside');
+  }
+});
+
+test('a path scope says the subtree is not self-contained', () => {
+  const root = scopedFixture();
+  const slice = subgraph(eng(root), { path: 'src/' });
+  assert.strictEqual(slice.path, 'src', 'a trailing slash is a signal, not part of the prefix');
+  assert.strictEqual(slice.out_of_scope, 2, 'lib/helper.ts and app/main.ts');
+  assert.strictEqual(slice.crossing.in, 1, 'app/main.ts imports src/edge.ts');
+  assert.strictEqual(slice.crossing.out, 1, 'src/edge.ts imports lib/helper.ts');
+});
+
+test('a directory target is promoted to a scope instead of failing to resolve', () => {
+  const root = scopedFixture();
+  const view = mapView(root, eng(root), loadConfig(root), { target: 'src' });
+  assert.strictEqual(view.unresolved, false, 'vnodes map src forwards the bare word');
+  assert.strictEqual(view.path, 'src');
+  assert.deepStrictEqual(view.nodes.map(n => n.key).sort(), ['src/core.ts', 'src/edge.ts']);
+});
+
+test('a target that is no file, symbol or directory is still unresolved', () => {
+  const root = scopedFixture();
+  const view = mapView(root, eng(root), loadConfig(root), { target: 'no-such' });
+  assert.strictEqual(view.unresolved, true);
+});
+
+// --------------------------------------------------------------- the accounting
+
+test('every omitted file is accounted for by exactly one field', () => {
+  const files = { 'README.md': '# readme\n', 'package.json': '{"name":"p"}\n' };
+  for (let i = 0; i < 12; i++) files[`src/f${i}.ts`] = `export function f${i}() { return ${i}; }\n`;
+  const root = fixture(files);
+  const cfg = loadConfig(root);
+  cfg.ui = { ...(cfg.ui || {}), map_max_nodes: 5 };
+  const view = mapView(root, eng(root), cfg, {});
+  assert.strictEqual(
+    view.counts.files + view.dropped + view.filtered.count + view.out_of_scope,
+    view.total_files,
+    'a file the map does not draw is trimmed, filtered or out of scope — never nowhere');
+});
+
+test('the accounting holds under a path scope too', () => {
+  const root = scopedFixture();
+  const view = mapView(root, eng(root), loadConfig(root), { path: 'src' });
+  assert.strictEqual(
+    view.counts.files + view.dropped + view.filtered.count + view.out_of_scope,
+    view.total_files);
+});
+
+test('nodes carry the top-level group the client tints by', () => {
+  const root = scopedFixture();
+  const view = mapView(root, eng(root), loadConfig(root), { show: 'all' });
+  const groups = new Set(view.nodes.map(n => n.group));
+  assert.ok(groups.has('src') && groups.has('lib') && groups.has('app'));
+  const rootFile = view.nodes.find(n => !n.key.includes('/'));
+  if (rootFile) assert.strictEqual(rootFile.group, '(root)');
+});
+
+test('an anchored document is drawn: the content filter never eats a pivot', () => {
+  const root = mixedFixture();
+  const anchored = subgraph(eng(root), { pin: ['docs/notes.md'], depth: 0 });
+  assert.ok(paths(anchored).includes('docs/notes.md'), 'a capsule pivot outranks the language rule');
+  // The walk already scoped this to the pin, so nothing reached the filter —
+  // an anchor that survives was never withheld, and `filtered` does not claim
+  // it was.
+  assert.strictEqual(anchored.filtered.count, 0);
+  const target = subgraph(eng(root), { target: 'docs/notes.md', depth: 0 });
+  assert.deepStrictEqual(paths(target), ['docs/notes.md'], 'and so does an explicit target');
+});

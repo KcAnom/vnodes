@@ -20,6 +20,18 @@ const LANG_BY_EXT = {
   '.r': 'r', '.jl': 'julia', '.pl': 'perl', '.groovy': 'groovy', '.tf': 'terraform',
 };
 
+/**
+ * Languages a dependency map cannot say anything about.
+ *
+ * Derived from the table above rather than listed a second time somewhere
+ * else, so adding an extension cannot leave two answers to "is this code".
+ * This gates only what the *map* draws by default; src/ignore.js decides what
+ * the indexer stores, and excluding markdown there would break
+ * `vnodes impact README.md`, capsule pivot resolution and the structural
+ * markdown parse below.
+ */
+const DOC_LANGS = new Set(['markdown', 'json', 'yaml', 'toml', 'html', 'css', 'env']);
+
 function langOf(relPath) {
   const base = path.basename(relPath);
   if (base.startsWith('.env')) return 'env'; // allowlisted examples index as env files
@@ -346,4 +358,4 @@ function parseFile(relPath, text) {
   return { lang, nodes, imports };
 }
 
-module.exports = { parseFile, langOf, LANG_BY_EXT };
+module.exports = { parseFile, langOf, LANG_BY_EXT, DOC_LANGS };

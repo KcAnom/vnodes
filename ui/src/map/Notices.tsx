@@ -1,19 +1,38 @@
 /**
- * The three things the map has to say out loud.
+ * The things the map has to say out loud.
  *
- * Trimming is the one that is an invariant rather than a nicety: a picture that
- * quietly omits 900 files reads as a complete picture of a small project. The
- * old renderer stated it and so does this one.
+ * Omission is the one that is an invariant rather than a nicety: a picture that
+ * quietly leaves out 900 files reads as a complete picture of a small project.
+ * There are now three ways a file can be left out — trimmed for size, filtered
+ * for not being code, or outside the scoped directory — and each is stated
+ * separately, next to the control that reverses it. Folding them together would
+ * make each remedy wrong for two thirds of what it claimed to explain.
  */
-import { AlertTriangle, Layers, RefreshCw } from 'lucide-react'
-import type { MapPayload } from './types'
+import { AlertTriangle, EyeOff, FolderTree, Layers, RefreshCw } from 'lucide-react'
+import { queryString } from './api'
+import type { MapPayload, MapQuery } from './types'
 
-export function Notices({ payload }: { payload: MapPayload }) {
-  const hasNotice = payload.dropped > 0 || payload.cycles.length > 0 || Boolean(payload.task)
+export function Notices({ payload, query }: { payload: MapPayload; query: MapQuery }) {
+  const filtered = payload.filtered.count
+  const hasNotice =
+    payload.dropped > 0 ||
+    filtered > 0 ||
+    payload.out_of_scope > 0 ||
+    payload.cycles.length > 0 ||
+    Boolean(payload.task)
   if (!hasNotice) return null
 
+  const langs = Object.entries(payload.filtered.langs)
+    .sort((a, b) => b[1] - a[1])
+    .map(([lang, count]) => `${count} ${lang}`)
+    .join(', ')
+
   return (
-    <div className="scroll-thin absolute bottom-3 left-3 z-20 flex max-h-[45%] w-96 flex-col gap-2 overflow-y-auto">
+    // Clear of the zoom column on the left: these notices sit above the canvas,
+    // and at z-20 over controls at z-5 they made the zoom buttons unclickable in
+    // exactly the sessions — trimmed, cyclic, capsule — where getting around the
+    // graph matters most.
+    <div className="scroll-thin absolute bottom-3 left-[56px] z-20 flex max-h-[38%] w-96 flex-col gap-2 overflow-y-auto">
       {payload.dropped > 0 && (
         <Notice icon={<AlertTriangle className="size-3.5" />} tone="accent">
           <b>
@@ -21,6 +40,35 @@ export function Notices({ payload }: { payload: MapPayload }) {
           </b>{' '}
           in scope, most-connected first — capsule pivots and the target first of all. The rest are
           not drawn. Scope the map with a target, or raise <code>ui.map_max_nodes</code>.
+        </Notice>
+      )}
+
+      {payload.out_of_scope > 0 && (
+        <Notice icon={<FolderTree className="size-3.5" />} tone="accent">
+          <b>
+            {payload.out_of_scope} file{payload.out_of_scope === 1 ? '' : 's'} outside{' '}
+            <code>{payload.path}</code>
+          </b>{' '}
+          are not drawn.{' '}
+          <a className="text-accent hover:underline" href={`/ui/map${queryString({ ...query, path: '' })}`}>
+            draw the whole project →
+          </a>
+        </Notice>
+      )}
+
+      {filtered > 0 && (
+        <Notice icon={<EyeOff className="size-3.5" />} tone="accent">
+          <b>
+            {filtered} non-code file{filtered === 1 ? '' : 's'}
+          </b>
+          {langs && ` (${langs})`} are not drawn — this map defaults to code, so the code is not
+          crowded out by what documents it.{' '}
+          <a
+            className="text-accent hover:underline"
+            href={`/ui/map${queryString({ ...query, show: 'all' })}`}
+          >
+            show all →
+          </a>
         </Notice>
       )}
 

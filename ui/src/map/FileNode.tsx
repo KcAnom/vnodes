@@ -12,8 +12,28 @@
  */
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react'
 import { FileCode2, Circle, RefreshCw, Unlink } from 'lucide-react'
-import { NodeShell } from '../kit/NodeShell'
+import { NodeShell, TONE_CLASSES, type NodeTone } from '../kit/NodeShell'
 import type { MapNode } from './types'
+
+export { TONE_CLASSES }
+
+/**
+ * The directories the ramp names, in the order they take colours. Anything else
+ * hashes into the same five, so a project whose top level is not vnodes' own
+ * still gets stable per-directory colour rather than one grey for everything.
+ * `(root)` and the unknown take --group-0, the muted one, because a file at the
+ * repo root belongs to no subsystem and should not look like it belongs to one.
+ */
+const GROUP_RAMP = ['src', 'ui', 'test', 'bin', 'config']
+
+export function groupColor(group: string): string {
+  if (!group || group === '(root)') return 'var(--group-0)'
+  const named = GROUP_RAMP.indexOf(group)
+  if (named >= 0) return `var(--group-${named + 1})`
+  let hash = 0
+  for (let i = 0; i < group.length; i += 1) hash = (hash * 31 + group.charCodeAt(i)) >>> 0
+  return `var(--group-${(hash % GROUP_RAMP.length) + 1})`
+}
 
 export type FileNodeData = MapNode & {
   width: number
@@ -24,7 +44,7 @@ export type FileNodeData = MapNode & {
 
 export type FileFlowNode = Node<FileNodeData, 'file'>
 
-function toneOf(data: MapNode): 'focus' | 'supporter' | 'cycle' | 'isolated' | undefined {
+function toneOf(data: MapNode): NodeTone | undefined {
   if (data.focus) return 'focus'
   if (data.supporter) return 'supporter'
   if (data.inCycle) return 'cycle'
@@ -49,10 +69,14 @@ export function FileNode({ data, selected }: NodeProps<FileFlowNode>) {
       <NodeShell
         icon={iconOf(data)}
         title={data.name}
-        subtitle={data.dir === '.' ? undefined : data.dir}
+        // Always a subtitle, even for a root-level file whose `dir` is empty:
+        // the header's stack has to be the same three lines on every node or
+        // the box stops being the 82px the server put it in a row for.
+        subtitle={data.dir || ' '}
         badge={data.lang}
         selected={selected}
         tone={toneOf(data)}
+        rail={groupColor(data.group)}
         dimmed={data.dimmed}
         width={data.width}
         height={data.height}

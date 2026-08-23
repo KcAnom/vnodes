@@ -23,6 +23,11 @@ function mapView(projectRoot, engDir, cfg, query = {}) {
   const task = String(query.task || '').trim();
   const repo = String(query.repo || '').trim();
   const depth = clampDepth(query.depth);
+  // Both live in the URL rather than in client state, because an SSE reconnect
+  // replays this same query object and a map linked into a review has to
+  // reproduce the picture its author was looking at.
+  const path = String(query.path || '').trim();
+  const show = query.show === 'all' ? 'all' : 'code';
   const maxNodes = (cfg.ui && cfg.ui.map_max_nodes) || 150;
 
   let focus = new Set();
@@ -41,6 +46,8 @@ function mapView(projectRoot, engDir, cfg, query = {}) {
     depth,
     repo,
     maxNodes,
+    path,
+    show,
     // Split, not merged: if the capsule outgrows the map's node budget the
     // pivots are the last thing to go, and the skeletons go before them.
     pin: [...focus],

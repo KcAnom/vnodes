@@ -16,120 +16,91 @@
  * then one of them would be lying.
  */
 
-const NODE_WIDTH = 280;
-/** Characters that fit on one line at the label's size inside a node. */
-const TITLE_CHARS_PER_LINE = 34;
-/** Beyond this a path is genuinely too long to read in a box; it gets an ellipsis. */
-const TITLE_MAX_LINES = 3;
-
-/** Baseline of the first label line, below the directory row. */
-const TITLE_TOP = 44;
-/** Baseline-to-baseline within the label block. */
-const TITLE_LEADING = 16;
-/** Last label baseline to the meta line below it. */
-const META_GAP = 20;
-/** Below the meta line to the bottom edge. */
-const NODE_BOTTOM = 12;
-
-const COL_GAP = 90;
-const ROW_GAP = 26;
-const MARGIN = 20;
+/**
+ * The height of every node box, in pixels, and one half of a cross-file
+ * contract with ui/src/kit/NodeShell.tsx.
+ *
+ * It is not a guess at what the DOM will do; it is the number the DOM is
+ * pinned to. 82 is exactly the sum of the fixed rows NodeShell renders:
+ * 1 border-top + 49 header (8 pad + 16.25 title + 15 subtitle + 8 pad +
+ * 1 border-bottom) + 31 body (8 pad + 15 meta + 8 pad) + 1 border-bottom.
+ * The client uses `h-[49px]` and `h-[31px]` and always renders a subtitle so
+ * the box cannot drift; the server owns the number because row pitch is
+ * layout, and layout is the server's. The previous value came from SVG
+ * text-baseline arithmetic for a renderer that no longer exists, which clipped
+ * the meta row on 44 of 49 boxes and collapsed the row gutter an edge routes
+ * through.
+ */
+const NODE_HEIGHT = 82;
 
 /**
- * Rows before a column spills into the next one.
+ * Past this many *indexed* files the roomy box stops paying for itself.
  *
- * Depth alone is not enough to lay out by: most files in a real project import
- * nothing local, so they all land at depth 0 and stack into one endless strip.
- * A level spills sideways once it passes this, and later levels shift right to
- * make room, so left-to-right still reads as dependency order.
+ * Counted against the whole index rather than the drawn slice, because the
+ * drawn count moves when trimming or the content filter changes and a single
+ * SSE frame would then rewrite every node's width and position under a reader
+ * who did nothing.
  */
-const MAX_ROWS_PER_COLUMN = 10;
+const COMPACT_THRESHOLD = 60;
 
-/** Past this many nodes the roomy box stops paying for itself and reads as sprawl. */
-const COMPACT_THRESHOLD = 40;
+/**
+ * The canvas shape the layout aims for, width over height.
+ *
+ * A browser viewport minus the toolbar and the detail panel is close to 2:1;
+ * a map fitted into it at 1.5 leaves the right half empty and one at 2.5
+ * shrinks every label below reading size.
+ */
+const TARGET_ASPECT = 1.9;
 
 /**
  * Every measurement the layout and the renderer share.
  *
- * Handed to the renderer on the view instead of imported from here, because
- * the two sizes below would otherwise have to be re-derived in page.js — which
- * is exactly how the first version of this in trailhead ended up drawing the
- * meta label on top of the second title line.
+ * Handed to the renderer on the view instead of imported from here, so the
+ * page never re-derives a number the layout already committed to. Height is
+ * the same in both branches on purpose: a box that changed height with density
+ * would change the row pitch, and the client's fixed rows cannot follow it.
  */
 function geometry(compact) {
   return compact
     ? {
       compact: true,
-      nodeWidth: 208, charsPerLine: 24, maxLines: 2,
-      titleTop: 38, titleLeading: 15, metaGap: 18, nodeBottom: 10,
-      colGap: 58, rowGap: 18, margin: 16, maxRows: 14,
+      nodeWidth: 208, nodeHeight: NODE_HEIGHT,
+      colGap: 96, rowGap: 28, margin: 24, maxRows: 12,
     }
     : {
       compact: false,
-      nodeWidth: NODE_WIDTH, charsPerLine: TITLE_CHARS_PER_LINE, maxLines: TITLE_MAX_LINES,
-      titleTop: TITLE_TOP, titleLeading: TITLE_LEADING, metaGap: META_GAP, nodeBottom: NODE_BOTTOM,
-      colGap: COL_GAP, rowGap: ROW_GAP, margin: MARGIN, maxRows: MAX_ROWS_PER_COLUMN,
+      nodeWidth: 280, nodeHeight: NODE_HEIGHT,
+      colGap: 120, rowGap: 28, margin: 24, maxRows: 12,
     };
 }
 
-/** Box height for a label that wrapped to `lines` lines. */
-function nodeHeightFor(lines, geom = geometry(false)) {
-  return geom.titleTop + (Math.max(1, lines) - 1) * geom.titleLeading + geom.metaGap + geom.nodeBottom;
-}
-
 /**
- * Wrap a file's name to the box.
+ * How many rows a column takes before it spills, chosen to fit the viewport.
  *
- * Paths break on separators before words, because `useAuth` and `Provider` in
- * `useAuthProvider.ts` are one token to a reader and splitting them mid-word
- * reads as two files. A name cut to "context-capsu…" tells you nothing, which
- * defeats the point of drawing the graph — the full key stays in the tooltip
- * either way.
+ * Depth alone is not enough to lay out by: most files in a real project import
+ * nothing local, so they all land at depth 0 and stack into one endless strip.
+ * A fixed cap solves that but has no relation to the shape being drawn — the
+ * same 10 rows produced a canvas at aspect 1.54 for the default view and 2.51
+ * for a task-scoped one, one wasting half the width and the other rendering
+ * 13px titles at 6.7px. Scoring on the log of the ratio makes too-wide and
+ * too-tall symmetric, so neither failure is preferred. The target is fixed
+ * here rather than taken from the query so a map URL pasted into a review
+ * renders the same picture for every reader.
  */
-function wrapTitle(title, maxChars = TITLE_CHARS_PER_LINE, maxLines = TITLE_MAX_LINES) {
-  const text = String(title || '').trim();
-  if (!text) return [''];
-  // Split after separators so the separator stays with the part it followed.
-  const words = text.split(/(?<=[/\-_.])/).filter(Boolean);
-
-  const lines = [];
-  let line = '';
-  let index = 0;
-
-  for (; index < words.length; index += 1) {
-    let word = words[index];
-    const candidate = line + word;
-    if (candidate.length <= maxChars) {
-      line = candidate;
-      continue;
-    }
-    if (line) {
-      lines.push(line);
-      line = '';
-      if (lines.length === maxLines) break;
-    }
-    // A single segment wider than the box has to break somewhere.
-    while (word.length > maxChars) {
-      lines.push(word.slice(0, maxChars));
-      word = word.slice(maxChars);
-      if (lines.length === maxLines) break;
-    }
-    if (lines.length === maxLines) break;
-    line = word;
+function rowsForShape(countByLevel, geom, target = TARGET_ASPECT) {
+  const counts = [...countByLevel.values()];
+  if (!counts.length) return 4;
+  const total = counts.reduce((a, b) => a + b, 0);
+  let best = null;
+  for (let rows = 3; rows <= Math.max(3, total); rows++) {
+    const columns = counts.reduce((n, c) => n + Math.ceil(c / rows), 0);
+    const deepest = Math.max(...counts.map(c => Math.min(c, rows)));
+    const w = columns * (geom.nodeWidth + geom.colGap) - geom.colGap + geom.margin * 2;
+    const h = deepest * (geom.nodeHeight + geom.rowGap) - geom.rowGap + geom.margin * 2;
+    const score = Math.abs(Math.log((w / h) / target));
+    if (!best || score < best.score) best = { rows, score };
   }
-
-  if (line && lines.length < maxLines) {
-    lines.push(line);
-    line = '';
-  }
-
-  const dropped = line !== '' || index < words.length;
-  if (dropped) {
-    const last = lines[lines.length - 1] ?? '';
-    lines[lines.length - 1] =
-      last.length >= maxChars ? `${last.slice(0, maxChars - 1)}…` : `${last}…`;
-  }
-  return lines;
+  return best.rows;
 }
 
 /** Directory rows are elided from the left — the tail is the part that locates a file. */
@@ -259,7 +230,7 @@ function buildMapView(slice, opts = {}) {
   const { root = '', task = '', intent = '', focus = new Set(), supporters = new Set() } = opts;
   // Dense graphs get the tighter box automatically. An explicit `compact` wins,
   // so the page's own toggle can override the guess in either direction.
-  const geom = geometry(opts.compact === undefined ? slice.files.length > COMPACT_THRESHOLD : !!opts.compact);
+  const geom = geometry(opts.compact === undefined ? slice.total_files > COMPACT_THRESHOLD : !!opts.compact);
 
   const keys = slice.files.map(f => f.path).sort();
   const present = new Set(keys);
@@ -283,11 +254,7 @@ function buildMapView(slice, opts = {}) {
   const cycleOf = new Map();
   for (const [i, component] of cycles.entries()) for (const k of component) cycleOf.set(k, i);
 
-  const wrapped = new Map(keys.map(k => [k, wrapTitle(basenameOf(k), geom.charsPerLine, geom.maxLines)]));
-  // One height for every box, set by the longest name in the slice. Boxes of
-  // differing heights in a row read as a hierarchy that is not there.
-  const tallest = Math.max(1, ...[...wrapped.values()].map(l => l.length));
-  const nodeHeight = nodeHeightFor(tallest, geom);
+  const nodeHeight = geom.nodeHeight;
 
   // How many columns each depth needs, and where its first one starts. Walked
   // in depth order so a level always begins to the right of every shallower
@@ -297,6 +264,8 @@ function buildMapView(slice, opts = {}) {
     const level = levels.get(key) ?? 0;
     countByLevel.set(level, (countByLevel.get(level) ?? 0) + 1);
   }
+  // Fitted before anything is placed: every column index below depends on it.
+  geom.maxRows = rowsForShape(countByLevel, geom);
   const firstColumnOf = new Map();
   let columns = 0;
   for (const level of [...countByLevel.keys()].sort((a, b) => a - b)) {
@@ -309,7 +278,25 @@ function buildMapView(slice, opts = {}) {
   const degreeOf = k => (inDeg.get(k) || 0) + (outDeg.get(k) || 0);
 
   /**
-   * Order within a column: connected before isolated, then by degree.
+   * Where each directory sits inside its own level, ranked by its most
+   * connected file.
+   *
+   * Without this, src/, src/view/, test/ and ui/src/map/ interleave down a
+   * column with nothing marking where one subsystem ends, so no subsystem is
+   * legible even though every one of them is drawn. This is ordering only —
+   * level still decides the column, so dependency order still reads
+   * left-to-right and the picture still agrees with `vnodes impact`.
+   */
+  const dirRank = new Map();
+  for (const key of keys) {
+    const slot = `${levels.get(key) ?? 0} ${dirnameOf(key)}`;
+    dirRank.set(slot, Math.max(dirRank.get(slot) ?? -1, degreeOf(key)));
+  }
+  const rankOf = key => -(dirRank.get(`${levels.get(key) ?? 0} ${dirnameOf(key)}`) ?? 0);
+
+  /**
+   * Order within a column: directory cluster, then connected before isolated,
+   * then by degree.
    *
    * Alphabetical order put `.claude/settings.local.json`, `README.md` and two
    * config files at the top of the first column, so the eye landed on four
@@ -321,6 +308,12 @@ function buildMapView(slice, opts = {}) {
     const la = levels.get(a) ?? 0;
     const lb = levels.get(b) ?? 0;
     if (la !== lb) return la - lb;
+    const ra = rankOf(a);
+    const rb = rankOf(b);
+    if (ra !== rb) return ra - rb;
+    const da = dirnameOf(a);
+    const db = dirnameOf(b);
+    if (da !== db) return da < db ? -1 : 1;
     const ia = isolatedOf(a) ? 1 : 0;
     const ib = isolatedOf(b) ? 1 : 0;
     if (ia !== ib) return ia - ib;
@@ -342,6 +335,13 @@ function buildMapView(slice, opts = {}) {
     position.set(key, { column, row });
   }
 
+  // How full each column ended up, so a short one can be centred against the
+  // tallest. Top-aligning every level produced a monotonic staircase with the
+  // whole bottom-right quadrant empty and edges forced to cross the boxes they
+  // ran past; centring spreads the same nodes over both diagonals.
+  const occupancy = new Map();
+  for (const { column } of position.values()) occupancy.set(column, (occupancy.get(column) ?? 0) + 1);
+
   // Ids stay in path order so the same file keeps the same id across renders.
   const nodes = keys.map((key, id) => {
     const level = levels.get(key) ?? 0;
@@ -352,7 +352,10 @@ function buildMapView(slice, opts = {}) {
       key,
       name: basenameOf(key),
       dir: elideLeft(dirnameOf(key)),
-      lines: wrapped.get(key) ?? [''],
+      // The top-level segment, which is the coarsest grouping a reader can
+      // hold in their head at a glance: the client tints by it and the toolbar
+      // builds its directory rail from it.
+      group: key.includes('/') ? key.slice(0, key.indexOf('/')) : '(root)',
       lang: file.lang,
       repo: file.repo,
       symbols: file.symbols,
@@ -360,7 +363,8 @@ function buildMapView(slice, opts = {}) {
       outDeg: outDeg.get(key) || 0,
       level,
       x: geom.margin + column * (geom.nodeWidth + geom.colGap),
-      y: geom.margin + row * (nodeHeight + geom.rowGap),
+      y: geom.margin
+        + Math.round(row + (deepestRow - (occupancy.get(column) ?? 0)) / 2) * (nodeHeight + geom.rowGap),
       isRoot: rootSet.has(key),
       focus: focus.has(key) || rootSet.has(key),
       supporter: supporters.has(key),
@@ -402,7 +406,17 @@ function buildMapView(slice, opts = {}) {
     cycles,
     counts,
     total_files: slice.total_files,
+    // Four kinds of omission, kept apart because each has a different remedy
+    // and the page names the control that reverses it. `dropped` stays what it
+    // always was — trimming to map_max_nodes and nothing else — because
+    // offering "raise map_max_nodes" for a file a language filter removed
+    // would be advice that does not work.
     dropped: slice.dropped || 0,
+    path: slice.path || '',
+    show: slice.show || 'code',
+    filtered: slice.filtered || { count: 0, langs: {} },
+    out_of_scope: slice.out_of_scope || 0,
+    crossing: slice.crossing || { in: 0, out: 0 },
     geom,
     nodeHeight,
     width: Math.max(geom.nodeWidth + geom.margin * 2,
@@ -417,14 +431,9 @@ module.exports = {
   geometry,
   levelsFor,
   cyclesFor,
-  wrapTitle,
-  nodeHeightFor,
   elideLeft,
-  NODE_WIDTH,
-  TITLE_TOP,
-  TITLE_LEADING,
-  TITLE_CHARS_PER_LINE,
-  TITLE_MAX_LINES,
-  NODE_BOTTOM,
-  MAX_ROWS_PER_COLUMN,
+  rowsForShape,
+  NODE_HEIGHT,
+  COMPACT_THRESHOLD,
+  TARGET_ASPECT,
 };

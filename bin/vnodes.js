@@ -187,6 +187,11 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       if (cmd === 'map' && args[0]) qs.push(`target=${encodeURIComponent(args.join(' '))}`);
       if (cmd === 'map' && flags.depth) qs.push(`depth=${encodeURIComponent(flags.depth)}`);
       if (cmd === 'map' && flags.task) qs.push(`task=${encodeURIComponent(flags.task)}`);
+      // The two new controls belong in the URL, not only in the browser
+      // toolbar: a flag the CLI cannot set means every reader hand-edits the
+      // query, and the link that gets pasted somewhere shows something else.
+      if (cmd === 'map' && flags.path) qs.push(`path=${encodeURIComponent(flags.path)}`);
+      if (cmd === 'map' && flags.all) qs.push('show=all');
       const url = `http://127.0.0.1:${cfg.mcp.port}/ui${cmd === 'map' ? '/map' : ''}${qs.length ? `?${qs.join('&')}` : ''}`;
       out(url);
       try { require('node:child_process').execFileSync('open', [url]); } catch {}
@@ -215,8 +220,9 @@ usage: vnodes <command> [args] [--flags]
   logs [daemon|index] [--follow]
   llm [status|enable|disable|runtime|ask <q>] [--runtime claude-code|pi] [--pi-model grok-4.5-latest|gpt-5.6-sol]
   ui                          open the status page (design-system seam)
-  map [target] [--depth N] [--task "..."]
+  map [target|dir] [--path DIR] [--all] [--depth N] [--task "..."]
                               open the live dependency map (scoped to target if given)
+                              draws code by default; --all includes markdown, json and config
 
 project: resolved upward from cwd (--project <path> to override)`);
   }

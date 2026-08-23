@@ -14,7 +14,12 @@ export type MapNode = {
   key: string
   name: string
   dir: string
-  lines: string[]
+  /**
+   * The first path segment — `src`, `ui`, `test`, `bin`, `config` — or `(root)`
+   * for a file that lives at the repo root. The server decides it because the
+   * server is what knows the scope; the client only colours by it.
+   */
+  group: string
   lang: string
   repo: string
   symbols: number
@@ -61,8 +66,31 @@ export type MapPayload = {
   total_files: number
   /** Files in scope that were not drawn. Never omitted, never silent. */
   dropped: number
+  /**
+   * The row pitch, and the height every node box must be. 82, declared once
+   * server-side because pitch is layout — see the contract note in
+   * ../kit/NodeShell.tsx, which pins the DOM to it.
+   */
   nodeHeight: number
-  geom: { nodeWidth: number; margin: number; compact: boolean }
+  geom: {
+    compact: boolean
+    nodeWidth: number
+    nodeHeight: number
+    colGap: number
+    rowGap: number
+    margin: number
+    maxRows: number
+  }
+  /** The directory the map was scoped to, resolved. Empty when unscoped. */
+  path: string
+  /** `code` hides markdown, json and config; `all` draws everything indexed. */
+  show: 'code' | 'all'
+  /** Files `show=code` withheld, and what they were. Stated, never silent. */
+  filtered: { count: number; langs: Record<string, number> }
+  /** Files outside `path`. Stated too, for the same reason. */
+  out_of_scope: number
+  /** Edges with exactly one end drawn: `in` points at the scope, `out` leaves it. */
+  crossing: { in: number; out: number }
 }
 
 export type FileDetail = {
@@ -80,4 +108,8 @@ export type MapQuery = {
   task?: string
   repo?: string
   depth?: string
+  /** Draw only this directory's subtree. */
+  path?: string
+  /** `all` to include the non-code files `code` withholds. */
+  show?: string
 }

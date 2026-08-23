@@ -7,6 +7,23 @@
 // edge among them — and changing graph.js to carry presentation fields would
 // leak the viewer into the tool contract.
 const { openStore } = require('./../store');
+const { DOC_LANGS } = require('../parser');
+
+/** A trailing slash is a directory signal, not part of the prefix we match on. */
+function normalizeDir(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
+/**
+ * Is this a directory the index knows about?
+ *
+ * Asked of the store rather than the filesystem, because a map that scoped
+ * itself to a directory the indexer never walked would draw an empty canvas
+ * and blame the reader for it.
+ */
+function isIndexedDir(db, dir) {
+  return !!db.prepare('SELECT 1 FROM files WHERE path LIKE ? || \'/%\' LIMIT 1').get(dir);
+}
 
 // Same resolution rule as graph.js resolveTargets: exact path, path suffix,
 // then symbol name. A viewer that resolved targets differently from the CLI
@@ -53,37 +70,100 @@ function neighborhood(db, roots, depth) {
  *
  * `pin` and `prefer` both anchor the walk; they differ only when the slice is
  * too big to draw. See the trim below for the order and why it has to exist.
+ *
+ * `path` is a different question from `target`: not "this file and what it
+ * touches" but "this subtree, whole". It is the shape of the request behind
+ * `vnodes map src`, and no walk answers it — a neighbourhood of src/ pulls in
+ * everything that imports src/ and stops being a picture of src/.
+ *
+ * `show` decides whether markdown, JSON and config are drawn. They default out
+ * because a dependency map has nothing to say about most of them: on this repo
+ * eleven of forty-nine drawn boxes were non-code and nine carried no edge at
+ * all, so a fifth of the canvas was spent on content the picture cannot
+ * express. The rule is by language and not by degree, because a zero-degree
+ * rule would also delete the isolated *code* files the map exists to surface.
  */
-function subgraph(engDir, { target = '', depth = 2, repo = '', maxNodes = 150, pin = [], prefer = [] } = {}) {
+function subgraph(engDir, {
+  target = '', depth = 2, repo = '', maxNodes = 150, pin = [], prefer = [], path = '', show = 'code',
+} = {}) {
   const db = openStore(engDir);
+  const codeOnly = show !== 'all';
   try {
     const totalFiles = db.prepare('SELECT COUNT(*) c FROM files').get().c;
-    if (totalFiles === 0) {
-      return { files: [], edges: [], roots: [], total_files: 0, dropped: 0, target, unresolved: false };
-    }
+    const empty = extra => ({
+      files: [], edges: [], roots: [], total_files: totalFiles, dropped: 0, target,
+      path: '', show: codeOnly ? 'code' : 'all', filtered: { count: 0, langs: {} },
+      out_of_scope: 0, crossing: { in: 0, out: 0 }, unresolved: false, ...extra,
+    });
+    if (totalFiles === 0) return empty({});
 
+    let scope = normalizeDir(path);
     let roots = [];
-    if (target) {
-      roots = resolveTargets(db, target, repo);
-      if (!roots.length) {
-        return { files: [], edges: [], roots: [], total_files: totalFiles, dropped: 0, target, unresolved: true };
+    if (target && !scope) {
+      // A target ending in `/` says "directory" outright; otherwise the file
+      // and symbol rules get first refusal and a directory is only inferred
+      // when they both come back empty. `vnodes map src` forwards the bare
+      // word, so the promotion has to live where the resolution does.
+      const asDir = normalizeDir(target);
+      if (/\/$/.test(target) && isIndexedDir(db, asDir)) {
+        scope = asDir;
+      } else {
+        roots = resolveTargets(db, target, repo);
+        if (!roots.length) {
+          if (!isIndexedDir(db, asDir)) return empty({ unresolved: true });
+          scope = asDir;
+        }
       }
     }
     // Pinned files (a capsule's pivots) and preferred ones (its skeletons)
     // anchor the slice just like a target does — a map of a capsule that
     // trimmed away the capsule's own files would be a map of something else.
     const anchors = [...new Set([...roots, ...pin, ...prefer])];
-    const keep = anchors.length ? neighborhood(db, anchors, depth) : null;
+    const keep = scope || !anchors.length ? null : neighborhood(db, anchors, depth);
 
+    const allEdges = db.prepare('SELECT src_file s, dst_file d FROM edges').all();
     const degree = new Map();
     const bump = (k, n) => degree.set(k, (degree.get(k) || 0) + n);
-    for (const e of db.prepare('SELECT src_file s, dst_file d FROM edges').all()) { bump(e.s, 1); bump(e.d, 1); }
+    for (const e of allEdges) { bump(e.s, 1); bump(e.d, 1); }
 
     const params = [];
     let sql = 'SELECT path, repo, lang FROM files';
     if (repo) { sql += ' WHERE repo = ?'; params.push(repo); }
     let files = db.prepare(sql).all(...params);
-    if (keep) files = files.filter(f => keep.has(f.path));
+    if (scope) files = files.filter(f => f.path === scope || f.path.startsWith(`${scope}/`));
+    else if (keep) files = files.filter(f => keep.has(f.path));
+
+    // Counted before the content filter runs, so the two omissions never
+    // double-count the same file.
+    const outOfScope = scope ? totalFiles - files.length : 0;
+    const crossing = { in: 0, out: 0 };
+    if (scope) {
+      // Measured against every edge in the index, not the drawn ones: the
+      // point is to say out loud that the subtree is not self-contained.
+      const inside = new Set(files.map(f => f.path));
+      for (const e of allEdges) {
+        if (!inside.has(e.s) && inside.has(e.d)) crossing.in += 1;
+        else if (inside.has(e.s) && !inside.has(e.d)) crossing.out += 1;
+      }
+    }
+
+    const filtered = { count: 0, langs: {} };
+    if (codeOnly) {
+      // An anchor is exempt. The overlay's promise is that it shows what an
+      // agent would actually be handed, and a capsule pivoting on README.md
+      // drawn without README.md shows something else — the same reason the
+      // trim ranks anchors above degree. Nothing is hidden by the exemption:
+      // an anchor that survives was never withheld, so `filtered` does not
+      // claim it was.
+      const anchored = new Set(anchors);
+      files = files.filter(f => {
+        const lang = f.lang || '';
+        if (!DOC_LANGS.has(lang) || anchored.has(f.path)) return true;
+        filtered.count += 1;
+        filtered.langs[lang] = (filtered.langs[lang] || 0) + 1;
+        return false;
+      });
+    }
 
     const considered = files.length;
     if (files.length > maxNodes) {
@@ -124,8 +204,15 @@ function subgraph(engDir, { target = '', depth = 2, repo = '', maxNodes = 150, p
       edges,
       roots: roots.filter(r => shown.has(r)),
       total_files: totalFiles,
+      // Still only the trim: raising ui.map_max_nodes is the remedy this
+      // number promises, and it is no remedy for the other three.
       dropped: considered - files.length,
       target,
+      path: scope,
+      show: codeOnly ? 'code' : 'all',
+      filtered,
+      out_of_scope: outOfScope,
+      crossing,
       unresolved: false,
     };
   } finally {

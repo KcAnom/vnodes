@@ -8,6 +8,10 @@ import type { FileDetail, MapPayload, MapQuery } from './types'
 export function queryString(query: MapQuery): string {
   const params = new URLSearchParams()
   for (const [key, value] of Object.entries(query)) {
+    // `show=code` is what the server does without being asked, so spelling it
+    // out would only lengthen every shared link and make `?show=all` — which is
+    // a deliberate act — read as though it were one of a pair of equals.
+    if (key === 'show' && value === 'code') continue
     if (value) params.set(key, value)
   }
   const encoded = params.toString()
@@ -22,6 +26,8 @@ export function queryFromLocation(): MapQuery {
     task: params.get('task') ?? '',
     repo: params.get('repo') ?? '',
     depth: params.get('depth') ?? '',
+    path: params.get('path') ?? '',
+    show: params.get('show') ?? '',
   }
 }
 
