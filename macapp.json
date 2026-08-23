@@ -1,0 +1,24 @@
+{
+  "name": "vnodes",
+  "identifier": "local.vnodes.app",
+  "version": "1.0.0",
+  "icon": "assets/icon.png",
+
+  "// command": "`daemon run` is the foreground mode; `daemon start` forks and would exit immediately, leaving the shell with nothing to host.",
+  "command": "node bin/vnodes.js daemon run",
+
+  "build": "",
+  "exec": "",
+  "resources": [],
+
+  "// port_env": "src/config.js:26 reads VNODES_PORT and overrides cfg.mcp.port with it.",
+  "port_env": "VNODES_PORT",
+  "addr_template": "{port}",
+  "args": [],
+  "preferred_port": "auto",
+
+  "// start_path": "/ui is the shell; / is a 404 with the page list.",
+  "start_path": "/ui",
+  "health_path": "",
+  "window": [1440, 900]
+}

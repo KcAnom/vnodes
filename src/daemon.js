@@ -266,6 +266,28 @@ function uiApi(pathname, q, projectRoot, cfg, send) {
   return send(404, { error: 'no such api route', api: UI_API_ROUTES });
 }
 
+/**
+ * Exactly one daemon per project writes the index.
+ *
+ * A second daemon on the same project is a normal thing to want — the macOS app
+ * runs its own on a private port while a terminal keeps one on the configured
+ * one — and until now both watched the same files and both called runIndex
+ * against the same SQLite file. The result was a steady stream of
+ * `watcher re-index failed: database is locked`, one of the two never seeing a
+ * change it was told about, and, worse, the newcomer overwriting the pidfile so
+ * `vnodes daemon stop` reached for the wrong process.
+ *
+ * Readers do not need to be the writer: a follower serves out of the same
+ * database the owner keeps current, so its answers are as fresh as the owner's.
+ * Only writing is exclusive.
+ */
+function claimIndexing(projectRoot, port) {
+  const state = daemonState(projectRoot);
+  if (state.running && state.pid !== process.pid) return false;
+  fs.writeFileSync(pidFile(projectRoot), JSON.stringify({ pid: process.pid, port }));
+  return true;
+}
+
 function serve(projectRoot) {
   const cfg = loadConfig(projectRoot);
   const port = cfg.mcp.port;
@@ -371,16 +393,37 @@ function serve(projectRoot) {
     throw e;
   });
   let stopWatcher = null;
-  server.listen(port, '127.0.0.1', () => {
-    fs.writeFileSync(pidFile(projectRoot), JSON.stringify({ pid: process.pid, port }));
+  let owner = false;
+  /**
+   * Take over indexing if nobody else holds it.
+   *
+   * Retried on a timer rather than decided once at boot, so a follower that
+   * outlives the owner starts watching instead of serving a frozen index.
+   */
+  const takeIndexing = () => {
+    if (owner || !claimIndexing(projectRoot, port)) return;
+    owner = true;
     if (cfg.index.watch !== false) stopWatcher = startWatcher(projectRoot, cfg);
-    log(projectRoot, 'daemon', `daemon started pid=${process.pid} port=${port} watch=${cfg.index.watch !== false}`);
+    log(projectRoot, 'daemon', `indexing owned by pid=${process.pid} watch=${cfg.index.watch !== false}`);
+  };
+
+  server.listen(port, '127.0.0.1', () => {
+    takeIndexing();
+    log(projectRoot, 'daemon', `daemon started pid=${process.pid} port=${port} owner=${owner}`);
     console.log(`vnodes daemon running on http://127.0.0.1:${port} (status: /status, ui: /ui)`);
+    if (!owner) console.log('another daemon owns indexing for this project; serving reads only');
   });
+  const claimTimer = setInterval(takeIndexing, 5000);
+  claimTimer.unref?.();
+
   const shutdown = () => {
     log(projectRoot, 'daemon', 'daemon stopped');
     stopWatcher?.();
-    try { fs.unlinkSync(pidFile(projectRoot)); } catch {}
+    clearInterval(claimTimer);
+    // Only the owner wrote the pidfile, so only the owner may remove it —
+    // a follower unlinking it would leave `vnodes daemon stop` with nothing
+    // to stop and the real indexer still running.
+    if (owner) { try { fs.unlinkSync(pidFile(projectRoot)); } catch {} }
     process.exit(0);
   };
   process.on('SIGTERM', shutdown);
@@ -590,7 +633,7 @@ code, pre { font-family: inherit; }`;
 }
 
 module.exports = {
-  serve, startDetached, stopDaemon, daemonState, doctor, httpCall,
+  serve, startDetached, stopDaemon, daemonState, claimIndexing, doctor, httpCall,
   // Exported for the tests that pin the two guarantees this file now carries:
   // that /rpc refuses a cross-origin write, and that the UI's data routes are
   // computed without a tool call.

@@ -694,3 +694,39 @@ test('a nested .gitignore is read one level down', () => {
   assert.strictEqual(isIgnored('src/.shots/cache.js'), false);
   assert.strictEqual(isIgnored('src/shots.js'), false);
 });
+
+// ------------------------------------------------- one writer, many readers
+
+test('a second daemon on the same project does not claim indexing', () => {
+  const { claimIndexing } = require('../src/daemon');
+  const root = fixture({ 'src/one.ts': 'export function one() { return 1; }\n' });
+  const pidPath = path.join(root, '.vnodes', 'daemon.pid');
+
+  assert.strictEqual(claimIndexing(root, 7821), true, 'an unclaimed project is claimable');
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(pidPath, 'utf8')), { pid: process.pid, port: 7821 });
+
+  // A live daemon that is not us. Our own pid stands in for one, because it is
+  // the only pid this test can be certain is running.
+  fs.writeFileSync(pidPath, JSON.stringify({ pid: process.pid, port: 7821 }));
+  const original = process.pid;
+  Object.defineProperty(process, 'pid', { value: original + 1, configurable: true });
+  try {
+    assert.strictEqual(claimIndexing(root, 41003), false, 'a live owner must not be displaced');
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(pidPath, 'utf8')).port, 7821,
+      'the follower must not overwrite the owner pidfile — `daemon stop` reads it',
+    );
+  } finally {
+    Object.defineProperty(process, 'pid', { value: original, configurable: true });
+  }
+});
+
+test('a dead owner is taken over, not deferred to forever', () => {
+  const { claimIndexing } = require('../src/daemon');
+  const root = fixture({ 'src/one.ts': 'export function one() { return 1; }\n' });
+  const pidPath = path.join(root, '.vnodes', 'daemon.pid');
+  // A pid high enough to be unallocated: the owner is gone and its pidfile is stale.
+  fs.writeFileSync(pidPath, JSON.stringify({ pid: 999999, port: 7821 }));
+  assert.strictEqual(claimIndexing(root, 41003), true, 'a stale pidfile must not block indexing forever');
+  assert.strictEqual(JSON.parse(fs.readFileSync(pidPath, 'utf8')).port, 41003);
+});

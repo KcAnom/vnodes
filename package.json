@@ -8,7 +8,9 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "ui:build": "npm --prefix ui ci && npm --prefix ui run build",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "app": "mkmacapp",
+    "app:install": "mkmacapp --install"
   },
   "main": "src/tools.js",
   "engines": {

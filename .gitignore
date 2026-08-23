@@ -15,3 +15,6 @@ node_modules/
 # Not written by setup any more (Gemini registers at user scope), but Gemini
 # itself still creates this for workspace state.
 .gemini/
+
+# mkmacapp output. The bundle is built from macapp.json, not committed.
+dist/
