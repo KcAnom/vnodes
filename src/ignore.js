@@ -23,7 +23,7 @@ function globToRegExp(glob) {
 
 // `prefix` scopes a nested ignore file to the directory it was found in, the way
 // git does: a pattern written in ui/.gitignore means "under ui/", never "anywhere".
-function parseIgnoreFile(file, prefix = '') {
+function parseIgnoreFile(file, prefix = '', source = '') {
   if (!fs.existsSync(file)) return [];
   const scope = prefix ? `${globToRegExp(prefix)}/` : '';
   return fs.readFileSync(file, 'utf8').split('\n')
@@ -39,7 +39,7 @@ function parseIgnoreFile(file, prefix = '') {
       const re = prefix
         ? new RegExp(anchored ? `^${scope}${body}(/|$)` : `^${scope}(.*/)?${body}(/|$)`)
         : new RegExp(anchored ? `^${body}(/|$)` : `(^|/)${body}(/|$)`);
-      return { re, negate, dirOnly };
+      return { re, negate, dirOnly, source: source || path.basename(file), pattern: line };
     });
 }
 
@@ -62,27 +62,49 @@ function nestedIgnoreRules(projectRoot) {
   try { entries = fs.readdirSync(projectRoot, { withFileTypes: true }); } catch { return rules; }
   for (const e of entries) {
     if (!e.isDirectory() || e.name.startsWith('.') || DEFAULT_EXCLUDES.includes(e.name)) continue;
-    rules.push(...parseIgnoreFile(path.join(projectRoot, e.name, '.gitignore'), e.name));
+    rules.push(...parseIgnoreFile(path.join(projectRoot, e.name, '.gitignore'), e.name, `${e.name}/.gitignore`));
   }
   return rules;
 }
 
 function buildIgnore(projectRoot) {
   const rules = [
-    ...DEFAULT_EXCLUDES.map(d => ({ re: new RegExp(`(^|/)${d.replace('.', '\\.')}(/|$)`), negate: false, dirOnly: false })),
+    ...DEFAULT_EXCLUDES.map(d => ({
+      re: new RegExp(`(^|/)${d.replace('.', '\\.')}(/|$)`),
+      negate: false, dirOnly: false, source: 'built-in', pattern: d,
+    })),
     ...parseIgnoreFile(path.join(projectRoot, '.gitignore')),
     ...nestedIgnoreRules(projectRoot),
     ...parseIgnoreFile(path.join(projectRoot, '.vnodesignore')),
     ...parseIgnoreFile(path.join(projectRoot, '.vnodes_ignore')),
   ];
-  return function isIgnored(relPath, isDir) {
+  /**
+   * Why a path was excluded, or null if it was not.
+   *
+   * Carried alongside the predicate rather than recomputed elsewhere, so the
+   * answer to "why is this file not in my knowledge base" comes from the same
+   * rules that excluded it. The index is what agents read; an exclusion nobody
+   * can see is the same silent omission the map is forbidden to make.
+   */
+  isIgnored.reason = function reason(relPath, isDir) {
+    let hit = null;
+    for (const r of rules) {
+      if (r.dirOnly && !isDir && !r.re.test(relPath + '/')) continue;
+      if (r.re.test(relPath)) hit = r.negate ? null : r;
+    }
+    return hit ? { source: hit.source, pattern: hit.pattern } : null;
+  };
+
+  return isIgnored;
+
+  function isIgnored(relPath, isDir) {
     let ignored = false;
     for (const r of rules) {
       if (r.dirOnly && !isDir && !r.re.test(relPath + '/')) continue;
       if (r.re.test(relPath)) ignored = !r.negate;
     }
     return ignored;
-  };
+  }
 }
 
 module.exports = { buildIgnore, DEFAULT_EXCLUDES };

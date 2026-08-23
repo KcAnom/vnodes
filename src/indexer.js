@@ -624,6 +624,26 @@ function indexStatus(projectRoot) {
     last_index_first_run: db.prepare("SELECT value FROM meta WHERE key = 'last_index_first_run'").get()?.value === '1',
   };
   db.close();
+  // What is on disk and deliberately absent, and the rule that made it so.
+  // The index is what every agent reads, so an exclusion nobody can see is the
+  // same silent omission the map is forbidden to make — and it has already cost
+  // a quarter of a capsule's budget once, unnoticed, because nothing reported it.
+  try {
+    const { excludedSummary } = require('./exclusions');
+    const report = excludedSummary(projectRoot);
+    out.excluded = {
+      subtrees: report.subtrees.length,
+      files: report.files.length,
+      by_source: report.by_source,
+      truncated: report.truncated,
+      // Named rather than counted: "why is X missing" is answered by seeing X.
+      sample: [...report.subtrees, ...report.files]
+        .slice(0, 12)
+        .map(item => `${item.path} (${item.source}${item.pattern ? `: ${item.pattern}` : ''})`),
+    };
+  } catch (e) {
+    out.excluded = { error: e.message };
+  }
   // Empty/unsupported workspace must be surfaced explicitly, not silent (ERR-001).
   if (out.files === 0) out.state = 'empty — no supported files found in this tree';
   return out;

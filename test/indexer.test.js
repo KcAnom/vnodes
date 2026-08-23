@@ -260,3 +260,75 @@ test('secrets and oversized files are skipped', () => {
   assert.ok(!files.includes('.env'), 'secret file must be skipped');
   assert.ok(!files.includes('big.js'), 'oversized file must be skipped');
 });
+
+// --------------------------------------- what is excluded, and by which rule
+
+const { excludedSummary } = require('../src/exclusions');
+const { indexStatus } = require('../src/indexer');
+
+test('an exclusion names the file that made it', () => {
+  const root = fixture({
+    'src/kept.ts': 'export function kept() { return 1; }\n',
+    'src/generated.ts': 'export function generated() { return 1; }\n',
+    'scratch/junk.ts': 'export function junk() { return 1; }\n',
+    '.gitignore': 'src/generated.ts\n',
+    '.vnodesignore': 'scratch/\n',
+  });
+  const report = excludedSummary(root);
+  const byPath = new Map([...report.subtrees, ...report.files].map(i => [i.path, i]));
+
+  assert.strictEqual(byPath.get('src/generated.ts')?.source, '.gitignore');
+  assert.strictEqual(byPath.get('src/generated.ts')?.pattern, 'src/generated.ts');
+  assert.strictEqual(byPath.get('scratch/')?.source, '.vnodesignore');
+  assert.ok(!byPath.has('src/kept.ts'), 'an indexed file is not reported as excluded');
+});
+
+test('a nested ignore file is named as the rule, not the root one', () => {
+  const root = fixture({
+    'ui/src/app.ts': 'export function app() { return 1; }\n',
+    'ui/build/out.ts': 'export function out() { return 1; }\n',
+    'ui/.gitignore': 'build/\n',
+  });
+  const report = excludedSummary(root);
+  const build = [...report.subtrees].find(s => s.path === 'ui/build/');
+  assert.ok(build, 'a subdirectory .gitignore must still exclude');
+  assert.strictEqual(build.source, 'ui/.gitignore',
+    'attributing it to the root .gitignore would send someone to the wrong file to fix it');
+});
+
+test('an excluded directory is reported as a subtree, not walked', () => {
+  const files = { 'src/app.ts': 'export function app() { return 1; }\n', '.gitignore': 'vendor/\n' };
+  for (let i = 0; i < 40; i++) files[`vendor/dep${i}.ts`] = `export function dep${i}() {}\n`;
+  const root = fixture(files);
+  const report = excludedSummary(root);
+  assert.ok(report.subtrees.some(s => s.path === 'vendor/'));
+  assert.strictEqual(report.files.filter(f => f.path.startsWith('vendor/')).length, 0,
+    'listing every file under an excluded tree buries the answer it is meant to give');
+});
+
+test('files with no recognised language are not reported as excluded', () => {
+  const root = fixture({
+    'src/app.ts': 'export function app() { return 1; }\n',
+    'notes.bin': 'binary-ish\n',
+    '.gitignore': 'notes.bin\n',
+  });
+  const report = excludedSummary(root);
+  assert.ok(!report.files.some(f => f.path === 'notes.bin'),
+    'it was never a candidate, so calling it excluded is noise');
+});
+
+test('index_status carries the exclusions, so an agent can ask why', () => {
+  const root = fixture({
+    'src/app.ts': 'export function app() { return 1; }\n',
+    'src/hidden.ts': 'export function hidden() { return 1; }\n',
+    '.gitignore': 'src/hidden.ts\n',
+  });
+  // This file's fixture() writes the tree without indexing it, and
+  // indexStatus returns 'uninitialized' before it reaches the exclusions.
+  runIndex(root, loadConfig(root));
+  const status = indexStatus(root);
+  assert.ok(status.excluded, 'index_status must report what it left out');
+  assert.strictEqual(status.excluded.by_source['.gitignore'], 1);
+  assert.ok(status.excluded.sample.some(s => s.startsWith('src/hidden.ts')),
+    'the sample names the path, because "why is X missing" is answered by seeing X');
+});
