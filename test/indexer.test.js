@@ -1,4 +1,5 @@
 'use strict';
+require('./_registry_home'); // isolates the knowledge-base registry from the developer's real ~/.config
 // End-to-end resolution: build fixture repos on disk, run the real index, and
 // assert the edges that land in the store. Each language block mirrors a
 // verified real-repo behavior.

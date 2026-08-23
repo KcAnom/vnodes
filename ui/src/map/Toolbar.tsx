@@ -6,8 +6,9 @@
  * link to is a map you cannot put in a review comment.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Search, Wifi, WifiOff } from 'lucide-react'
+import { Radio, Search, Wifi, WifiOff } from 'lucide-react'
 import { queryString } from './api'
+import type { MapHello } from './api'
 import { TONE_CLASSES, groupColor } from './FileNode'
 import type { MapPayload, MapQuery } from './types'
 import { cn } from '../kit/utils'
@@ -34,6 +35,7 @@ export function Toolbar({
   filter,
   onFilter,
   live,
+  hello,
   onHeight,
 }: {
   payload: MapPayload
@@ -41,6 +43,8 @@ export function Toolbar({
   filter: string
   onFilter: (next: string) => void
   live: boolean
+  /** What the stream said about itself, or null from a daemon that does not. */
+  hello: MapHello | null
   /**
    * This rail's real height. It floats over the canvas and reflows with the
    * window, so fitView can only keep the top row of nodes clear of it by being
@@ -100,7 +104,7 @@ export function Toolbar({
         <p className="min-w-0 flex-1 truncate font-mono text-[10px] text-muted-foreground">
           {payload.path || payload.target || payload.task || payload.root}
         </p>
-        <Live live={live} />
+        <Live live={live} hello={hello} />
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px]">
@@ -204,6 +208,16 @@ export function Toolbar({
               the reader asked to see. Absent at the default, so the URL only
               ever spells out the deliberate choice. */}
           {draft.show === 'all' && <input type="hidden" name="show" value="all" />}
+          {/* Not the same kind of hidden input as those two. `compact` and
+              `show` are geometry and taste, and losing one costs the reader a
+              preference they can set again in a second. This form has no
+              `onSubmit` and no `preventDefault` — pressing "draw" is a real
+              browser navigation to `/ui/map` that replaces the entire query
+              string with only the inputs named here — so a missing `kb` does
+              not lose a preference, it silently redraws a different project
+              under the same pathname. It is carried whenever there is one,
+              never conditionally on a default, because it has no default. */}
+          {query.kb && <input type="hidden" name="kb" value={query.kb} />}
           <button
             type="submit"
             className="rounded border border-border px-2.5 py-1 text-[12px] hover:bg-panel-hover"
@@ -211,8 +225,11 @@ export function Toolbar({
             draw
           </button>
           {(query.target || query.task || query.depth || query.path) && (
+            // The sharpest of the raw anchors on this page: "clear" means clear
+            // the query, and a reader dropping a path filter has said nothing
+            // whatsoever about wanting a different project.
             <a
-              href="/ui/map"
+              href={`/ui/map${queryString({ kb: query.kb })}`}
               className="rounded px-2 py-1 text-[12px] text-muted-foreground hover:bg-panel-hover hover:text-foreground"
             >
               clear
@@ -245,20 +262,57 @@ export function Toolbar({
 }
 
 /**
- * Whether the live stream is attached. Shown because the alternative is a page
- * that quietly stops updating and keeps presenting old counts as current.
+ * Whether these numbers can be expected to move, and why.
+ *
+ * Three states rather than two, because the two were not enough to be honest
+ * with. `live` alone means "the socket opened", and a knowledge base that
+ * nothing is indexing produces a socket that opens and then never says another
+ * word — which looked, on this chip, exactly like a project being actively
+ * rebuilt. The stream's `hello` frame is what separates them: whether this
+ * daemon watches the KB, and failing that whether any process claims it.
+ *
+ * A daemon that sends no `hello` leaves `hello` null and the chip says what it
+ * has always said, because inventing a third state out of an absent frame would
+ * be the same overstatement in the other direction.
  */
-function Live({ live }: { live: boolean }) {
+function Live({ live, hello }: { live: boolean; hello: MapHello | null }) {
+  if (!live) {
+    return (
+      <span
+        title="not receiving updates"
+        className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-accent"
+      >
+        <WifiOff className="size-3" />
+        offline
+      </span>
+    )
+  }
+
+  const watched = hello ? hello.watched_by_this_daemon || hello.owner_pid !== null : true
+  if (!watched) {
+    return (
+      <span
+        title="nothing is indexing this knowledge base, so these numbers will not change on their own — run vnodes index --project <path>"
+        className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-accent"
+      >
+        <Radio className="size-3" />
+        static
+      </span>
+    )
+  }
+
+  const other = hello && !hello.watched_by_this_daemon && hello.owner_pid !== null
   return (
     <span
-      title={live ? 'live: frames arrive when the index changes' : 'not receiving updates'}
-      className={cn(
-        'flex shrink-0 items-center gap-1 font-mono text-[10px]',
-        live ? 'text-muted-foreground' : 'text-accent',
-      )}
+      title={
+        other
+          ? `live: another daemon (pid ${hello.owner_pid}) indexes this project; frames arrive when it does`
+          : 'live: frames arrive when the index changes'
+      }
+      className="flex shrink-0 items-center gap-1 font-mono text-[10px] text-muted-foreground"
     >
-      {live ? <Wifi className="size-3" /> : <WifiOff className="size-3" />}
-      {live ? 'live' : 'offline'}
+      <Wifi className="size-3" />
+      {other ? `live · pid ${hello.owner_pid}` : 'live'}
     </span>
   )
 }

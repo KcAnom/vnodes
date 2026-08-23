@@ -3,6 +3,7 @@
  * the daemon is on localhost and the index is the only source of truth, so a
  * cache here could only ever be a way to show something that is no longer true.
  */
+import { withKb } from '../shell/kb'
 import type { FileDetail, MapPayload, MapQuery } from './types'
 
 export function queryString(query: MapQuery): string {
@@ -11,6 +12,12 @@ export function queryString(query: MapQuery): string {
     // `show=code` is what the server does without being asked, so spelling it
     // out would only lengthen every shared link and make `?show=all` — which is
     // a deliberate act — read as though it were one of a pair of equals.
+    //
+    // `kb` is never elided this way and there is no equivalent shortcut for it.
+    // `show=code` can be dropped because the server does the same thing without
+    // it; dropping `kb` would change which project answers, and the daemon's
+    // fallback when it is absent is the project it happens to have been
+    // launched in — a different graph, drawn under the same URL.
     if (key === 'show' && value === 'code') continue
     if (value) params.set(key, value)
   }
@@ -27,6 +34,12 @@ export function queryString(query: MapQuery): string {
  * rebuilt every request from the keys it read, so the param was dropped on the
  * first fetch and on every SSE reconnect alike. A key the client does not read
  * is a key the client silently deletes.
+ *
+ * `kb` is the second instance of the same bug and the more expensive one. A
+ * dropped `compact` costs the reader a geometry they chose; a dropped `kb`
+ * means `/ui/map?kb=abc` draws the launch project's graph while the address bar
+ * says otherwise — on the first fetch and on every reconnect, with nothing on
+ * the page to suggest anything happened.
  */
 export function readQuery(params: URLSearchParams): MapQuery {
   return {
@@ -37,6 +50,7 @@ export function readQuery(params: URLSearchParams): MapQuery {
     path: params.get('path') ?? '',
     show: params.get('show') ?? '',
     compact: params.get('compact') ?? '',
+    kb: params.get('kb') ?? '',
   }
 }
 
@@ -52,10 +66,28 @@ export async function fetchMap(query: MapQuery): Promise<MapPayload> {
 }
 
 export async function fetchDetail(file: string): Promise<FileDetail | null> {
-  const res = await fetch(`/ui/map/node?file=${encodeURIComponent(file)}`)
+  // The only URL on this page that `queryString` does not build, so it is the
+  // only one that needs the KB folded in by hand.
+  const res = await fetch(withKb(`/ui/map/node?file=${encodeURIComponent(file)}`))
   if (res.status === 404) return null
   if (!res.ok) throw new Error(`detail unavailable (${res.status})`)
   return res.json()
+}
+
+/**
+ * What the stream says about itself on connect.
+ *
+ * The daemon polls the KB's index stamp and pushes when it moves, which means
+ * it reports a re-index done by any process — but it does not mean anything is
+ * indexing this KB at all. A KB nothing watches produces a socket that opens
+ * and then stays silent forever, which is a different fact from a live one and
+ * used to be indistinguishable from it.
+ */
+export type MapHello = {
+  kb: string | null
+  watched_by_this_daemon: boolean
+  last_index: number | null
+  owner_pid: number | null
 }
 
 /**
@@ -63,14 +95,28 @@ export async function fetchDetail(file: string): Promise<FileDetail | null> {
  * so a frame arriving means the code actually changed. `onState` reports the
  * connection so the page can say it has gone quiet rather than showing stale
  * numbers as though they were current.
+ *
+ * `onHello` is what stops the page overstating that. Before it, `live` went
+ * true because the socket opened, which for a KB nobody is indexing — the home
+ * accident's `meta` is empty and its stamp is 0 forever — was a permanent lie.
+ * A daemon that does not send the frame leaves `onHello` uncalled and the page
+ * falls back to exactly what it said before.
  */
 export function subscribe(
   query: MapQuery,
   onFrame: (payload: MapPayload) => void,
   onState: (live: boolean) => void,
+  onHello?: (hello: MapHello) => void,
 ): () => void {
   const source = new EventSource(`/ui/map/events${queryString(query)}`)
   source.onopen = () => onState(true)
+  source.addEventListener('hello', (event) => {
+    try {
+      onHello?.(JSON.parse((event as MessageEvent).data))
+    } catch {
+      /* Same reasoning as a malformed frame: this is a label, not the data. */
+    }
+  })
   source.onmessage = (event) => {
     try {
       onFrame(JSON.parse(event.data))

@@ -26,6 +26,7 @@ import { Copyable } from '../shell/Copyable'
 import { Input } from '../shell/Input'
 import { Stat } from '../shell/Stat'
 import { Link, navigate, useRoute } from '../shell/route'
+import { useKb } from '../shell/kb'
 import { fetchCapsule } from '../shell/api'
 import type { Capsule } from '../shell/api'
 import { cn } from '../kit/utils'
@@ -118,6 +119,7 @@ function Query({
   pending: boolean
 }) {
   const [draft, setDraft] = useState({ task, preset, maxTokens })
+  const kb = useKb()
   useEffect(() => setDraft({ task, preset, maxTokens }), [task, preset, maxTokens])
 
   return (
@@ -126,15 +128,23 @@ function Query({
       method="get"
       onSubmit={(event) => {
         event.preventDefault()
+        // Built fresh from the draft rather than edited from the current URL,
+        // which is what drops anything the draft does not know about — so the
+        // knowledge base has to be put back by name.
         const next = new URLSearchParams()
         if (draft.task) next.set('task', draft.task)
         if (draft.preset) next.set('preset', draft.preset)
         if (draft.maxTokens) next.set('max_tokens', draft.maxTokens)
+        if (kb) next.set('kb', kb)
         const encoded = next.toString()
         navigate(`/ui/capsule${encoded ? `?${encoded}` : ''}`)
       }}
       className="flex flex-wrap items-center gap-1.5"
     >
+      {/* And again in the markup, because this form carries a real `action`:
+          if the interception never runs, the browser submits it and only the
+          named inputs survive. */}
+      {kb && <input type="hidden" name="kb" value={kb} />}
       <Input
         name="task"
         placeholder="what are you about to do?"

@@ -12,9 +12,18 @@
  * object on every store read, React would see the snapshot change on every
  * render, and the page would re-render until the tab died. The parse happens in
  * a `useMemo` keyed on that string instead.
+ *
+ * The one thing this router does beyond those three jobs is keep `?kb=` on the
+ * links it renders, and it does it on the **href attribute**, not only in the
+ * click handler. That is not a shortcut, it is the same promise `Link`'s own
+ * bail-outs below are already keeping: "copy link address is how a map gets
+ * into a review comment". A link whose visible href lacks `kb` but whose
+ * onClick adds it is two destinations behind one control, and the one that gets
+ * pasted into the review comment is the wrong project's.
  */
 import { useMemo, useSyncExternalStore } from 'react'
 import type { MouseEvent, ReactNode } from 'react'
+import { KB_EXEMPT, KB_PARAM, currentKb } from './kb'
 
 /**
  * `pushState` fires nothing — `popstate` is only the back button. So a push
@@ -33,9 +42,36 @@ function subscribe(onChange: () => void) {
   }
 }
 
+/**
+ * `to`, with the current knowledge base folded in.
+ *
+ * Twenty `Link` and `navigate` sites across five files each build a `/ui…` URL
+ * from scratch. Hand-editing all twenty would work exactly once and regress on
+ * the next link somebody adds, with nothing to catch it — so the carrying
+ * happens here, where every one of them already passes through.
+ *
+ * Four conditions, all of them narrowing: only `/ui` paths (a link off this app
+ * is not ours to annotate), never `/ui/bases` (see `KB_EXEMPT` — it is how a
+ * reader leaves a KB), never over an explicit `?kb=` the caller wrote, and
+ * never when there is no KB to carry, which is what keeps every URL in a
+ * single-project daemon byte-identical to what it was.
+ */
+export function withKbHref(to: string): string {
+  const kb = currentKb()
+  if (!kb) return to
+  if (!to.startsWith('/ui')) return to
+  const [pathname] = to.split(/[?#]/, 1)
+  if (KB_EXEMPT.includes(pathname.replace(/\/+$/, '') || pathname)) return to
+  const url = new URL(to, window.location.origin)
+  if (url.searchParams.has(KB_PARAM)) return to
+  url.searchParams.set(KB_PARAM, kb)
+  return url.pathname + url.search + url.hash
+}
+
 export function navigate(to: string, options?: { replace?: boolean }) {
-  if (to === currentHref()) return
-  window.history[options?.replace ? 'replaceState' : 'pushState']({}, '', to)
+  const target = withKbHref(to)
+  if (target === currentHref()) return
+  window.history[options?.replace ? 'replaceState' : 'pushState']({}, '', target)
   for (const listener of listeners) listener()
 }
 
@@ -80,9 +116,13 @@ export function Link({
   children: ReactNode
   onClick?: (event: MouseEvent<HTMLAnchorElement>) => void
 }) {
+  // Computed once per render and used for both the attribute and the push, so
+  // the address the reader can copy and the address the click goes to are the
+  // same string by construction rather than by two call sites agreeing.
+  const href = withKbHref(to)
   return (
     <a
-      href={to}
+      href={href}
       className={className}
       title={title}
       onClick={(event) => {
@@ -91,7 +131,7 @@ export function Link({
         if (event.button !== 0) return
         if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
         event.preventDefault()
-        navigate(to)
+        navigate(href)
       }}
     >
       {children}

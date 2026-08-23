@@ -48,6 +48,28 @@ shoot notes        "$base/notes"
 shoot notes-search "$base/notes?q=map"
 shoot index        "$base/index"
 
+# The picker, which is now the app's landing page — the state most likely to be
+# wrong and least likely to be looked at twice. `bases` and the bare `$base`
+# shot above are the same component; both are kept because they are two URLs a
+# reader arrives on and only one of them is the one anybody types.
+shoot bases        "$base/bases"
+shoot bases-narrow "$base/bases" 960 800
+
+# A page scoped to a knowledge base that is not the launch project, resolved out
+# of the registry rather than hard-coded, because the ids are per-machine.
+# Parsed with node rather than sed: the daemon minifies its JSON onto one line
+# and a greedy `.*"id"` would take the last entry, not the first.
+kb=$(curl -s "$base/api/kbs" | node -e 'let b="";process.stdin.on("data",c=>b+=c).on("end",()=>{try{const j=JSON.parse(b);process.stdout.write((j.kbs||[]).map(r=>r.id).find(id=>/^[0-9a-f]{16}$/.test(id))||"")}catch{}})')
+if [ -n "$kb" ]; then
+  shoot kb-scoped  "$base?kb=$kb"
+else
+  echo "== kb-scoped skipped: /ui/api/kbs listed no knowledge base" >&2
+fi
+
+# A kb id that resolves to nothing — what a link from another machine looks
+# like. It must say so and must not draw a graph.
+shoot bad-kb       "$base/map?kb=0000000000000000"
+
 # A page that does not exist, because the catch-all used to answer 200 for it.
 shoot missing      "$base/nope"
 

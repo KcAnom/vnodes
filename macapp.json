@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "icon": "assets/icon.png",
 
-  "// command": "`daemon run` is the foreground mode; `daemon start` forks and would exit immediately, leaving the shell with nothing to host.",
-  "command": "node bin/vnodes.js daemon run",
+  "// command": "`daemon run` is the foreground mode; `daemon start` forks and would exit immediately, leaving the shell with nothing to host. `--hub` is what makes this an app rather than a viewer for one repo: mkmacapp's command mode runs with THIS repo as cwd, so without it the app's daemon adopted the vnodes source tree as its project and every window opened on vnodes itself. A hub daemon owns no project — it serves the knowledge-base registry, indexes nothing and watches nothing — so there is no project for it to be wrong about.",
+  "command": "node bin/vnodes.js daemon run --hub",
 
   "build": "",
   "exec": "",
@@ -17,8 +17,8 @@
   "args": [],
   "preferred_port": "auto",
 
-  "// start_path": "/ui is the shell; / is a 404 with the page list.",
-  "start_path": "/ui",
+  "// start_path": "/ui/bases is the knowledge-base picker: every project this machine has indexed, newest activity first. The app opens there rather than on any one project's overview, because the app has no one project. Each row links on to that knowledge base's pages as /ui?kb=<id>.",
+  "start_path": "/ui/bases",
   "health_path": "",
   "window": [1440, 900]
 }

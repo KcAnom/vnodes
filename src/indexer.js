@@ -576,6 +576,20 @@ function runIndex(projectRoot, cfg, log) {
   const nodeCount = db.prepare('SELECT COUNT(*) c FROM nodes').get().c;
   const edgeCount = db.prepare('SELECT COUNT(*) c FROM edges').get().c;
   const fileCount = db.prepare('SELECT COUNT(*) c FROM files').get().c;
+  const langs = db.prepare('SELECT lang, COUNT(*) c FROM files GROUP BY lang ORDER BY c DESC LIMIT 3').all().map(r => r.lang || 'unknown');
+  const repos = db.prepare('SELECT DISTINCT repo FROM files').all().map(r => r.repo || '(root)');
+  // W1: registration is a side effect of INDEXING, never of merely reading. A
+  // finished run is the only moment at which every field of the snapshot is
+  // both true and already in scope, and the write is throttled so the watcher's
+  // debounced re-runs collapse to one a minute. Wrapped because a registry
+  // failure — a full disk, an unwritable ~/.config — must never be able to
+  // throw into indexing, which is the thing that actually matters here.
+  try {
+    require('./registry').recordIndex(projectRoot, {
+      files: fileCount, nodes: nodeCount, edges: edgeCount, langs, repos,
+      ms: Date.now() - t0, last_indexed_ms: Date.now(), engDir,
+    }, cfg);
+  } catch {}
   db.close();
   return { ms: Date.now() - t0, files: fileCount, nodes: nodeCount, edges: edgeCount, stats };
 }
@@ -646,6 +660,25 @@ function indexStatus(projectRoot) {
   }
   // Empty/unsupported workspace must be surfaced explicitly, not silent (ERR-001).
   if (out.files === 0) out.state = 'empty — no supported files found in this tree';
+  /**
+   * An index.db on disk is not evidence that an index run ever finished.
+   *
+   * `state: 'ready'` used to rest on fs.existsSync(index.db) alone, and the
+   * accidental knowledge base at $HOME is the proof of what that costs: its
+   * meta table is empty, it has no manifest.json, it holds 3.67M nodes and zero
+   * edges, and every status check called it healthy. Any code path that opens a
+   * store creates that file — so "the file exists" and "this tree was indexed"
+   * are different claims, and only the second one is worth reporting as ready.
+   *
+   * Checked last so it wins over 'empty': a run that never finished has no file
+   * count to be empty about.
+   */
+  if (!out.last_index || !fs.existsSync(path.join(engDir, 'manifest.json'))) {
+    out.state = 'incomplete';
+    out.detail = 'no index run has ever finished on this tree'
+      + (out.last_index ? ' (manifest.json is missing)' : ' (meta.last_index is unset)')
+      + ' — run: vnodes index';
+  }
   return out;
 }
 

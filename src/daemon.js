@@ -8,7 +8,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
-const { loadConfig, findProjectRoot, engineDir } = require('./config');
+const { loadConfig, findProjectRoot, engineDirPath } = require('./config');
+const { resolveKb, listKbs, ensureEntry, registryCfg } = require('./registry');
 const { TOOL_DEFS, callTool } = require('./tools');
 const { indexStatus } = require('./indexer');
 const { loadWorkspace } = require('./workspace');
@@ -71,7 +72,30 @@ function startWatcher(projectRoot, cfg) {
   return () => { clearTimeout(timer); for (const w of watchers) w.close(); };
 }
 
-const UI_API_ROUTES = ['/ui/api/health', '/ui/api/capsule', '/ui/api/notes', '/ui/api/composition'];
+const UI_API_ROUTES = ['/ui/api/kbs', '/ui/api/health', '/ui/api/capsule', '/ui/api/notes', '/ui/api/composition'];
+
+/**
+ * Why this /ui data request is refused, or null if it is allowed.
+ *
+ * The same Origin and Host rule /rpc has carried, minus the content-type clause
+ * — these are GETs, and demanding a content-type on a GET would refuse the
+ * page's own fetches. Verified before this existed: `GET /ui/api/composition`
+ * with `Origin: https://evil.example` returned 200, because rpcDenial was wired
+ * only into the /rpc POST branch. On a 72-file repo that buys an attacker
+ * milliseconds of someone else's CPU and a file listing; with a knowledge-base
+ * selector it is one URL away from the 541,275-file home index, where
+ * buildCapsule was measured at 18.6 seconds of synchronous work on the daemon's
+ * only event loop. `sec-fetch-site` is checked as well as Origin because a
+ * cross-site navigation sends no Origin header at all.
+ */
+function uiDenial(req, port) {
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  const origin = req.headers.origin;
+  if (origin !== undefined && !hosts.some(h => origin === `http://${h}`)) return `origin ${origin}`;
+  if (!hosts.includes(req.headers.host || '')) return `host ${req.headers.host || '(none)'}`;
+  if (req.headers['sec-fetch-site'] === 'cross-site') return 'sec-fetch-site cross-site';
+  return null;
+}
 
 /** Why this /rpc request is refused, or null if it is allowed. */
 function rpcDenial(req, port) {
@@ -102,11 +126,20 @@ function tailLog(projectRoot, channel, lines = 50) {
   }
 }
 
-/** How many observations there are, and of what kind. Lets the notes page say what it is looking at. */
+/**
+ * How many observations there are, and of what kind. Lets the notes page say
+ * what it is looking at.
+ *
+ * Read-only: this ran openMemory, which CREATES memory.db, on a GET. For the
+ * daemon's own project that was invisible; for a knowledge base named in a
+ * query parameter it would be the daemon writing a database into a project the
+ * reader merely clicked on.
+ */
 function observationCounts(engDir) {
-  const { openMemory } = require('./store');
+  const { openMemoryReadOnly } = require('./store');
   try {
-    const db = openMemory(engDir);
+    const db = openMemoryReadOnly(engDir);
+    if (!db) return null;
     const r = db.prepare(`SELECT COUNT(*) total,
       SUM(CASE WHEN kind = 'manual' THEN 1 ELSE 0 END) manual,
       SUM(CASE WHEN kind <> 'manual' THEN 1 ELSE 0 END) auto,
@@ -114,7 +147,7 @@ function observationCounts(engDir) {
     db.close();
     return { total: Number(r.total || 0), manual: Number(r.manual || 0), auto: Number(r.auto || 0), stale: Number(r.stale || 0) };
   } catch {
-    return { total: 0, manual: 0, auto: 0, stale: 0 };
+    return null;
   }
 }
 
@@ -127,7 +160,14 @@ function observationCounts(engDir) {
  * head of a clipped pivot: that is the one thing the editor cannot show,
  * because the clip is a decision the capsule made and not a fact about the file.
  */
-function capsuleForUi(capsule, task, cfg) {
+/**
+ * `projectFlag` is the project root to name in the reproduction line, or null
+ * for the daemon's own. bin/vnodes.js resolves the project upward from cwd, so
+ * once this page can preview a capsule for a knowledge base that is not the
+ * daemon's launch project, the bare `vnodes pipeline "<task>"` printed here
+ * reproduces a DIFFERENT project's capsule for whoever pastes it.
+ */
+function capsuleForUi(capsule, task, cfg, projectFlag = null) {
   const CLIP_HEAD_CHARS = 2000;
   return {
     ...capsule,
@@ -144,7 +184,7 @@ function capsuleForUi(capsule, task, cfg) {
     skeletons: capsule.skeletons.map(s => ({ file: s.file, tokens: s.tokens, detail: s.detail })),
     stripped: 'file bodies are not sent to the UI; only the head of a clipped pivot is',
     baseline: cfg.capsule.savings_baseline,
-    command: `vnodes pipeline ${JSON.stringify(task)}`,
+    command: `vnodes pipeline ${JSON.stringify(task)}${projectFlag ? ` --project ${projectFlag}` : ''}`,
   };
 }
 
@@ -163,8 +203,12 @@ function capsuleForUi(capsule, task, cfg) {
  * inventing an empty one, which would read as "nothing was excluded".
  */
 function composition(engDir, projectRoot) {
-  const { openStore } = require('./store');
-  const db = openStore(engDir);
+  const { openStoreReadOnly } = require('./store');
+  // Read-only, and null rather than an empty page when there is no store: this
+  // is reached by a GET that may name any registered knowledge base, and
+  // openStore would have created an index.db inside it to answer.
+  const db = openStoreReadOnly(engDir);
+  if (!db) return null;
   const files = db.prepare('SELECT path, repo, lang, size FROM files').all();
   const symbols = new Map(db.prepare('SELECT file, COUNT(*) c FROM nodes GROUP BY file').all().map(r => [r.file, Number(r.c)]));
   const connected = new Set();
@@ -248,45 +292,138 @@ function composition(engDir, projectRoot) {
  * searchMemory / doctor directly is the pattern src/view/index.js already uses
  * for the map, and it writes nothing.
  */
-function uiApi(pathname, q, projectRoot, cfg, send) {
-  const engDir = engineDir(projectRoot);
+/**
+ * Whole-index work this knowledge base is too big for, or null.
+ *
+ * Not a taste judgement. composition() reads every row of `files` plus a full
+ * edge scan into JS Maps; buildCapsule was measured at 18,648 ms and subgraph
+ * at 7,850 ms against the home knowledge base — all of it synchronous, on the
+ * daemon's single event loop, which means every other page in every other tab
+ * stops for the duration. A 413 that names the file count and the size is a
+ * better answer than a daemon that appears to have hung.
+ */
+function oversizeRefusal(root, entry, cfg, what) {
+  const rcfg = registryCfg(cfg);
+  const { engineDbBytes } = require('./registry');
+  const dbBytes = engineDbBytes(engineDirPath(root));
+  const files = entry && Number.isFinite(entry.files) ? entry.files : null;
+  const limitBytes = rcfg.oversize_db_mb * 1024 * 1024;
+  const over = (files !== null && files > rcfg.oversize_files) || (dbBytes !== null && dbBytes > limitBytes);
+  if (!over) return null;
+  return {
+    error: `${what} is refused for this knowledge base: it is too large to compute in one synchronous pass`,
+    files, db_bytes: dbBytes,
+    limits: { oversize_files: rcfg.oversize_files, oversize_db_mb: rcfg.oversize_db_mb },
+    hint: 'ask a narrower question — the map accepts ?target= or ?path= to scope a slice — or disown this index if it was indexed by accident (vnodes kb list shows why)',
+  };
+}
+
+/**
+ * composition(), remembered per index generation.
+ *
+ * It is the most expensive read on the /ui surface — every file row plus a full
+ * edge scan — and the answer cannot change while the index has not been
+ * rewritten. Keyed on the engine directory and the index database's mtime, so a
+ * re-index invalidates it without anyone having to remember to. Eight entries:
+ * enough for a reader flipping between knowledge bases, small enough that the
+ * cache is never the thing holding a hundred megabytes of row objects alive.
+ */
+const COMPOSITION_CACHE_MAX = 8;
+const compositionCache = new Map();
+function cachedComposition(engDir, root) {
+  let stamp = 0;
+  try { stamp = fs.statSync(path.join(engDir, 'index.db')).mtimeMs; } catch {}
+  const key = `${engDir}@${stamp}`;
+  if (compositionCache.has(key)) return compositionCache.get(key);
+  const value = composition(engDir, root);
+  compositionCache.set(key, value);
+  while (compositionCache.size > COMPOSITION_CACHE_MAX) {
+    compositionCache.delete(compositionCache.keys().next().value);
+  }
+  return value;
+}
+
+/**
+ * The read-only data family behind the operator pages, for ONE knowledge base.
+ *
+ * `ctx.root` came out of resolveKb, which means it is either the daemon's own
+ * launch project or the `path` field of a registry record vnodes wrote. It is
+ * never a string a caller supplied. `ctx.engDir` is engineDirPath, not
+ * engineDir: this runs on every request, and the creating version would mkdir
+ * `.vnodes/logs` and write a `.gitignore` inside whatever project the URL named.
+ */
+function uiApi(pathname, q, ctx, send) {
+  const { root, engDir, cfg, kb, kbSource, entry, launchRoot } = ctx;
+  const projectFlag = root === launchRoot ? null : root;
   if (pathname === '/ui/api/health') {
     const { llmState, runtimeInfo, runtimeCliFound } = require('./runtime');
     // doctor() is async (it probes the port) and createServer's callback is not,
     // so the response is written from the promise rather than returned.
-    doctor(projectRoot).then(d => send(200, {
+    doctor(root).then(d => send(200, {
+      // Which project these numbers are about, and whether the URL said so or
+      // the daemon fell back to its own. A page that cannot tell the difference
+      // is a page that will eventually show one project's health under
+      // another's name.
+      kb, kb_source: kbSource, project: root,
       doctor: d,
-      llm: { ...llmState(projectRoot), mode: 'runtime-cli', runtime: runtimeInfo(projectRoot), runtime_cli_found: runtimeCliFound(projectRoot) },
-      config: loadConfig(projectRoot),
-      logs: { daemon: tailLog(projectRoot, 'daemon'), index: tailLog(projectRoot, 'index'), tail_lines: 50 },
+      llm: { ...llmState(root), mode: 'runtime-cli', runtime: runtimeInfo(root), runtime_cli_found: runtimeCliFound(root) },
+      config: loadConfig(root),
+      logs: { daemon: tailLog(root, 'daemon'), index: tailLog(root, 'index'), tail_lines: 50 },
     })).catch(e => send(500, { error: e.message }));
     return;
   }
   if (pathname === '/ui/api/capsule') {
     const task = String(q.task || '').trim();
     if (!task) return send(400, { error: 'no task' });
+    const refusal = oversizeRefusal(root, entry, cfg, 'building a capsule');
+    if (refusal) return send(413, { kb, ...refusal });
     const { buildCapsule } = require('./capsule');
-    const capsule = buildCapsule(projectRoot, engDir, cfg, {
+    const capsule = buildCapsule(root, engDir, cfg, {
       task,
       preset: q.preset || undefined,
       max_tokens: clamp(q.max_tokens, 500, 200000, undefined),
       session: 'ui',
     });
-    return send(200, capsuleForUi(capsule, task, cfg));
+    return send(200, { kb, ...capsuleForUi(capsule, task, cfg, projectFlag) });
   }
   if (pathname === '/ui/api/notes') {
     const { searchMemory, sessionContext } = require('./memory');
     const limit = clamp(q.limit, 1, 100, 20);
+    // Never created to answer a GET. A knowledge base with no memory store is a
+    // real, sayable state — "no agent has recorded anything here yet" — and
+    // saying it is better than the daemon writing a memory.db into a project
+    // from a surface documented as read-only.
+    const memDb = path.join(engDir, 'memory.db');
+    if (!fs.existsSync(memDb)) {
+      return send(404, {
+        kb, error: 'this knowledge base has no memory store yet', expected: memDb,
+        detail: 'observations are written by agents through the MCP tools; nothing has written one for this project',
+      });
+    }
     const counts = observationCounts(engDir);
     // No `session` on either call: this daemon is not an agent session, and
     // passing one would sort the browser's own reads to the top of a feed whose
     // whole point is what the agents did.
     const query = String(q.q || '').trim();
+    // Stated rather than assumed: staleness flags are as of the last write by
+    // an indexer or an agent. Refreshing them is an UPDATE, and this surface
+    // does not write.
+    const staleness = {
+      staleness_refreshed: false,
+      staleness_note: 'stale flags are as of the last index run or agent call; the read-only UI does not re-check them',
+    };
     return query
-      ? send(200, { query, results: searchMemory(engDir, query, { limit }), counts })
-      : send(200, { observations: sessionContext(engDir, { limit }), counts });
+      ? send(200, { kb, query, results: searchMemory(engDir, query, { limit, readOnly: true }), counts, ...staleness })
+      : send(200, { kb, observations: sessionContext(engDir, { limit, readOnly: true }), counts, ...staleness });
   }
-  if (pathname === '/ui/api/composition') return send(200, composition(engDir, projectRoot));
+  if (pathname === '/ui/api/composition') {
+    const refusal = oversizeRefusal(root, entry, cfg, 'index composition');
+    if (refusal) return send(413, { kb, ...refusal });
+    const c = cachedComposition(engDir, root);
+    return c
+      ? send(200, { kb, ...c })
+      : send(404, { kb, error: 'this knowledge base has no index database', expected: path.join(engDir, 'index.db') });
+  }
   return send(404, { error: 'no such api route', api: UI_API_ROUTES });
 }
 
@@ -312,9 +449,29 @@ function claimIndexing(projectRoot, port) {
   return true;
 }
 
+/**
+ * Serve one daemon.
+ *
+ * `projectRoot` may be null: that is HUB MODE, which the macOS app runs in. A
+ * hub owns no project, so it indexes nothing, watches nothing, claims no
+ * pidfile and registers nothing — it serves the registry, and every scoped
+ * route demands a ?kb= because there is no launch project to fall back to.
+ * That is the whole fix for "opening the app always shows the vnodes repo":
+ * the app's daemon no longer has a project it could be wrong about.
+ */
 function serve(projectRoot) {
+  const hub = !projectRoot;
   const cfg = loadConfig(projectRoot);
   const port = cfg.mcp.port;
+  // The hub has no .vnodes/logs to write into, and path.join(null, …) throws
+  // inside a request listener, which takes the whole daemon down.
+  const dlog = msg => { if (projectRoot) log(projectRoot, 'daemon', msg); };
+  // The port actually bound, which is not cfg.mcp.port when the caller asked
+  // for an ephemeral one. The Origin/Host rules compare against it, so they
+  // must not read a 0 the kernel already replaced.
+  let actualPort = port;
+  const boundPort = () => actualPort;
+  let owner = false;
   const server = http.createServer((req, res) => {
     const send = (code, body, type = 'application/json') => {
       res.writeHead(code, { 'content-type': type });
@@ -323,7 +480,12 @@ function serve(projectRoot) {
     if (req.method === 'GET' && req.url === '/status') {
       // UI must distinguish daemon-stopped from empty-index (ERR-005) — this
       // endpoint answering at all means the daemon is up; body carries index state.
-      return send(200, { daemon: 'running', pid: process.pid, port, project: projectRoot, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
+      // Deliberately NOT overloaded with an array of projects: doctor() fetches
+      // this against a foreign daemon and reads `project` to name the collision.
+      // In hub mode that field is null, which is the true answer.
+      return send(200, hub
+        ? { daemon: 'running', pid: process.pid, port, project: null, index: { state: 'hub' }, workspace: null }
+        : { daemon: 'running', pid: process.pid, port, project: projectRoot, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
     }
     if (req.method === 'GET' && req.url === '/tools') return send(200, { tools: TOOL_DEFS });
     // Parsing moved up here from inside the /ui branch, which means it now runs
@@ -355,19 +517,77 @@ function serve(projectRoot) {
       // no JavaScript beyond a fetch loop, and it is what keeps
       // cfg.ui.sidebar_refresh_s a setting that does something.
       if (url.pathname === '/ui/status') return send(200, uiHtml(cfg), 'text/html');
-      // The payload the page draws. Also the honest answer to "what does the map
-      // know" for anything that is not a browser.
-      if (url.pathname === '/ui/map/data') {
-        const { mapView } = require('./view');
-        return send(200, mapView(projectRoot, engineDir(projectRoot), cfg, q));
+
+      // The picker's payload. Global on purpose: it takes no ?kb= and must
+      // never grow one — it is the list you consult to learn what the ids are.
+      const scoped = url.pathname === '/ui/map/data' || url.pathname === '/ui/map/events'
+        || url.pathname === '/ui/map/node' || url.pathname.startsWith('/ui/api/');
+      if (scoped) {
+        const denial = uiDenial(req, boundPort());
+        if (denial) {
+          dlog(`ui data refused: ${denial} for ${url.pathname}`);
+          return send(403, { error: `refused: ${denial}`, detail: 'the /ui data routes answer this daemon\'s own pages only' });
+        }
       }
-      if (url.pathname === '/ui/map/events') return mapEvents(req, res, projectRoot, cfg, q);
-      if (url.pathname === '/ui/map/node') {
-        const { fileDetail } = require('./view/data');
-        const detail = fileDetail(engineDir(projectRoot), q.file || '');
-        return detail ? send(200, detail) : send(404, { error: 'not indexed', file: q.file || '' });
+      if (url.pathname === '/ui/api/kbs') {
+        return send(200, listKbs({ launchRoot: projectRoot, cfg }));
       }
-      if (url.pathname.startsWith('/ui/api/')) return uiApi(url.pathname, q, projectRoot, cfg, send);
+
+      if (scoped) {
+        /**
+         * One resolution per request, and the only one anywhere.
+         *
+         * `q.kb` is a registry KEY. resolveKb looks it up and hands back a root
+         * that came out of a file vnodes itself wrote; it never joins caller
+         * text into a path. Every failure is a 404 (or a 400 when a hub was
+         * given nothing to work with) and NEVER a fall back to the launch
+         * project: a 200 drawn from the wrong project is exactly the failure
+         * the /ui path-prefix fix was written to eliminate.
+         */
+        const r = resolveKb(q.kb, projectRoot);
+        if (!r.ok) return send(r.code === 'no_default' ? 400 : 404, { ...r, hint: 'ids come from /ui/api/kbs' });
+        const root = r.root;
+        const engDir = engineDirPath(root);
+        // The knowledge base's own config, not the daemon's: token budgets, map
+        // node caps and refresh intervals are per-project settings, and reading
+        // one project's numbers under another's config is a quiet lie.
+        const kcfg = r.source === 'query' ? loadConfig(root) : cfg;
+
+        if (url.pathname === '/ui/map/data') {
+          // The payload the page draws. Also the honest answer to "what does the
+          // map know" for anything that is not a browser.
+          if (!q.target && !q.path) {
+            const refusal = oversizeRefusal(root, r.entry, kcfg, 'an unscoped map of the whole index');
+            if (refusal) return send(413, { kb: r.id, ...refusal });
+          }
+          const { mapView } = require('./view');
+          return send(200, mapView(root, engDir, kcfg, q));
+        }
+        if (url.pathname === '/ui/map/events') {
+          return mapEvents(req, res, root, kcfg, q, {
+            kb: r.id,
+            // True only when this daemon is the one whose watcher re-indexes
+            // this project. The page used to set live=true because the socket
+            // opened, which for a knowledge base nothing indexes is a permanent
+            // lie — and for the home knowledge base, whose indexStamp is 0
+            // forever, a permanent lie that never even changes frame.
+            watched_by_this_daemon: !hub && root === projectRoot && owner,
+          });
+        }
+        if (url.pathname === '/ui/map/node') {
+          const { fileDetail } = require('./view/data');
+          const detail = fileDetail(engDir, q.file || '');
+          return detail ? send(200, detail) : send(404, { error: 'not indexed', file: q.file || '', kb: r.id });
+        }
+        try {
+          return uiApi(url.pathname, q, {
+            root, engDir, cfg: kcfg, kb: r.id, kbSource: r.source, entry: r.entry, launchRoot: projectRoot,
+          }, send);
+        } catch (e) {
+          dlog(`ui api failed on ${url.pathname}: ${e.message}`);
+          return send(500, { error: e.message, route: url.pathname, kb: r.id });
+        }
+      }
       const { PAGES, renderShell } = require('./view/shell');
       if (PAGES.has(url.pathname)) return send(200, renderShell(url.pathname), 'text/html');
       return send(404, { error: 'no such page', pages: [...PAGES.keys()], api: UI_API_ROUTES });
@@ -381,9 +601,12 @@ function serve(projectRoot) {
       // Demanding application/json forces a preflight the Origin rule then
       // fails; the CLI and MCP clients send no Origin at all, so nothing
       // legitimate changes.
-      const denial = rpcDenial(req, port);
+      // A hub owns no project, so there is nothing for a tool to run against.
+      // Answering 400 is honest; picking a project for the caller is not.
+      if (hub) return send(400, { ok: false, error: 'this daemon has no launch project (hub mode); run tools against a project daemon or use the CLI' });
+      const denial = rpcDenial(req, boundPort());
       if (denial) {
-        log(projectRoot, 'daemon', `rpc refused: ${denial}`);
+        dlog(`rpc refused: ${denial}`);
         return send(403, { ok: false, error: `refused: ${denial}` });
       }
       let body = '';
@@ -394,7 +617,7 @@ function serve(projectRoot) {
           const result = callTool(projectRoot, tool, args || {}, session || 'http');
           send(200, { ok: true, result });
         } catch (e) {
-          log(projectRoot, 'daemon', `rpc error: ${e.message}`);
+          dlog(`rpc error: ${e.message}`);
           send(400, { ok: false, error: e.message });
         }
       });
@@ -410,53 +633,74 @@ function serve(projectRoot) {
   server.on('error', e => {
     if (e.code === 'EADDRINUSE') {
       // Port taken (ERR-007): name the fix, don't crash silently.
-      log(projectRoot, 'daemon', `port ${port} in use — set VNODES_PORT or .vnodes/config.json mcp.port and restart`);
+      dlog(`port ${port} in use — set VNODES_PORT or .vnodes/config.json mcp.port and restart`);
       console.error(`vnodes daemon: port ${port} in use. Fix: set VNODES_PORT=<port> or "mcp": {"port": <port>} in .vnodes/config.json`);
       process.exit(1);
     }
     throw e;
   });
   let stopWatcher = null;
-  let owner = false;
   /**
    * Take over indexing if nobody else holds it.
    *
    * Retried on a timer rather than decided once at boot, so a follower that
    * outlives the owner starts watching instead of serving a frozen index.
+   * A hub never takes it: it has no project to index.
    */
   const takeIndexing = () => {
-    if (owner || !claimIndexing(projectRoot, port)) return;
+    if (hub || owner || !claimIndexing(projectRoot, actualPort)) return;
     owner = true;
     if (cfg.index.watch !== false) stopWatcher = startWatcher(projectRoot, cfg);
-    log(projectRoot, 'daemon', `indexing owned by pid=${process.pid} watch=${cfg.index.watch !== false}`);
+    dlog(`indexing owned by pid=${process.pid} watch=${cfg.index.watch !== false}`);
   };
 
   server.listen(port, '127.0.0.1', () => {
+    actualPort = server.address().port;
     takeIndexing();
-    log(projectRoot, 'daemon', `daemon started pid=${process.pid} port=${port} owner=${owner}`);
-    console.log(`vnodes daemon running on http://127.0.0.1:${port} (status: /status, ui: /ui)`);
-    if (!owner) console.log('another daemon owns indexing for this project; serving reads only');
+    // W2. The launch project is listed the first time its daemon runs, which is
+    // also the whole migration path: a project indexed before the registry
+    // existed self-registers here, so there is no scan job and no backfill.
+    // Nothing is indexed by this — a project with no index.db is not listed.
+    if (!hub) { try { ensureEntry(projectRoot, 'daemon', { cfg }); } catch {} }
+    dlog(`daemon started pid=${process.pid} port=${actualPort} owner=${owner}`);
+    console.log(`vnodes daemon running on http://127.0.0.1:${actualPort} (status: /status, ui: ${hub ? '/ui/bases' : '/ui'})`);
+    if (hub) console.log('hub mode: no launch project — /ui is the knowledge-base picker; scoped pages need ?kb=<id>');
+    else if (!owner) console.log('another daemon owns indexing for this project; serving reads only');
   });
   const claimTimer = setInterval(takeIndexing, 5000);
   claimTimer.unref?.();
 
-  const shutdown = () => {
-    log(projectRoot, 'daemon', 'daemon stopped');
+  const stop = () => {
     stopWatcher?.();
+    stopWatcher = null;
     clearInterval(claimTimer);
     // Only the owner wrote the pidfile, so only the owner may remove it —
     // a follower unlinking it would leave `vnodes daemon stop` with nothing
     // to stop and the real indexer still running.
     if (owner) { try { fs.unlinkSync(pidFile(projectRoot)); } catch {} }
+    try { server.close(); } catch {}
+  };
+  const shutdown = () => {
+    dlog('daemon stopped');
+    stop();
     process.exit(0);
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+  // Returned so a caller that started this in-process — the tests do — can shut
+  // it down and learn which port the kernel actually handed out. The CLI
+  // ignores it and keeps running in the foreground exactly as before.
+  return { server, close: stop, port: () => actualPort };
 }
 
+// A null projectRoot starts a hub: no project, no watcher, the registry and the
+// picker only. cwd still has to be something real for spawn, so it is this
+// package — which the hub never reads a config or an index out of.
 function startDetached(projectRoot) {
-  const child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'vnodes.js'), 'daemon', 'run'],
-    { cwd: projectRoot, detached: true, stdio: 'ignore' });
+  const args = [path.join(__dirname, '..', 'bin', 'vnodes.js'), 'daemon', 'run'];
+  if (!projectRoot) args.push('--hub');
+  const child = spawn(process.execPath, args,
+    { cwd: projectRoot || path.join(__dirname, '..'), detached: true, stdio: 'ignore' });
   child.unref();
   return child.pid;
 }
@@ -500,7 +744,14 @@ async function doctor(projectRoot) {
 
   add('config', !cfg._config_error, cfg._config_error || 'defaults + .vnodes/config.json parsed');
   const st = indexStatus(projectRoot);
-  add('index', st.state === 'ready', `state: ${st.state}${st.nodes ? `, ${st.nodes} nodes / ${st.files} files / ${st.edges} edges` : ''}`);
+  // `incomplete` is its own failing check with its own reason. It used to be
+  // reported as ready, because ready rested on index.db existing — which is how
+  // the one knowledge base most in need of disowning is the one this page called
+  // healthy.
+  add('index', st.state === 'ready',
+    st.state === 'incomplete'
+      ? `state: incomplete — ${st.detail}${st.nodes ? ` (the store holds ${st.nodes} nodes / ${st.files} files / ${st.edges} edges from an unfinished run)` : ''}`
+      : `state: ${st.state}${st.nodes ? `, ${st.nodes} nodes / ${st.files} files / ${st.edges} edges` : ''}`);
 
   // Index speed vs the configured targets (first_run_target_s for a from-scratch
   // build, manifest_rebuild_target_s for incremental runs).
@@ -545,7 +796,10 @@ async function doctor(projectRoot) {
   add('transport', ds.running ? !portFree : (portFree || !!holder),
     ds.running ? (portFree ? 'pidfile says running but port is free — kill stale daemon' : `port ${cfg.mcp.port} held by daemon`)
       : portFree ? `port ${cfg.mcp.port} free for HTTP transport (stdio is default)`
-        : holder ? `port ${cfg.mcp.port} held by vnodes daemon for ${holder.project || 'another project'} (pid ${holder.pid}) — stdio unaffected; set VNODES_PORT for HTTP here`
+        // `project: null` is the hub, not an unknown project: the app's daemon
+        // deliberately owns none, and saying "another project" there would
+        // invent one.
+        : holder ? `port ${cfg.mcp.port} held by vnodes daemon ${holder.project ? `for ${holder.project}` : '(no project — hub mode)'} (pid ${holder.pid}) — stdio unaffected; set VNODES_PORT for HTTP here`
           : `port ${cfg.mcp.port} taken by a non-vnodes process — set VNODES_PORT`);
 
   // LLM layer: state machine says enabled, but does the runtime CLI exist?
@@ -578,10 +832,10 @@ async function doctor(projectRoot) {
  * byte-identical frame. The keepalive comment holds the connection open through
  * proxies without carrying a payload.
  */
-function mapEvents(req, res, projectRoot, cfg, query) {
+function mapEvents(req, res, projectRoot, cfg, query, hello = {}) {
   const { mapView } = require('./view');
   const { indexStamp } = require('./view/data');
-  const engDir = engineDir(projectRoot);
+  const engDir = engineDirPath(projectRoot);
   const everyMs = ((cfg.ui && cfg.ui.map_refresh_s) || 3) * 1000;
 
   res.writeHead(200, {
@@ -591,6 +845,32 @@ function mapEvents(req, res, projectRoot, cfg, query) {
   });
 
   let stamp = indexStamp(engDir);
+
+  /**
+   * One `hello` frame, before any data frame.
+   *
+   * "Live" used to mean nothing more than that the socket opened, so a
+   * knowledge base no daemon is watching rendered as live forever — and for the
+   * home knowledge base, whose meta table is empty and whose indexStamp is
+   * therefore 0 for all time, live and permanently frozen at once. This says
+   * which of the three real states it is: watched by this daemon, watched by
+   * another daemon (whose pid is in that project's own pidfile), or static.
+   */
+  let ownerPid = null;
+  try { ownerPid = JSON.parse(fs.readFileSync(path.join(projectRoot, '.vnodes', 'daemon.pid'), 'utf8')).pid ?? null; } catch {}
+  if (ownerPid !== null) {
+    try { process.kill(ownerPid, 0); } catch { ownerPid = null; } // a dead pid is not an indexer
+  }
+  try {
+    res.write(`event: hello\ndata: ${JSON.stringify({
+      kb: hello.kb ?? null,
+      watched_by_this_daemon: !!hello.watched_by_this_daemon,
+      owner_pid: hello.watched_by_this_daemon ? process.pid : ownerPid,
+      last_index: stamp || null,
+      refresh_s: everyMs / 1000,
+    })}\n\n`);
+  } catch {}
+
   const timer = setInterval(() => {
     let next;
     try { next = indexStamp(engDir); } catch { return; }
@@ -620,9 +900,12 @@ function uiHtml(cfg) {
 <dl><dt>Files</dt><dd id="files">–</dd><dt>Nodes</dt><dd id="nodes">–</dd>
 <dt>Edges</dt><dd id="edges">–</dd><dt>Repos</dt><dd id="repos">–</dd>
 <dt>Last index</dt><dd id="last">–</dd></dl>
-<p>This is the plain-HTML status page — it shows the counts and nothing else.
-The pages that explain them need the built bundle:</p>
+<p>This is the plain-HTML status page. It reports on this daemon's own launch
+project only — the other pages can be pointed at any knowledge base with
+<code>?kb=</code>, and this one cannot. The pages that explain the counts need
+the built bundle:</p>
 <ul>
+<li><a href="/ui/bases">knowledge bases</a> — every indexed project this machine knows about</li>
 <li><a href="/ui">overview</a> — doctor checks, language mix, logs</li>
 <li><a href="/ui/map">dependency map</a></li>
 <li><a href="/ui/capsule">capsule preview</a> — what an agent is handed for a task</li>
@@ -631,6 +914,10 @@ The pages that explain them need the built bundle:</p>
 </ul>
 <script>
 async function tick(){try{const r=await fetch('/status');const s=await r.json();
+if(s.index.state==='hub'){document.getElementById('state').textContent=
+'hub — no launch project; pick a knowledge base at /ui/bases';
+for(const k of ['files','nodes','edges','repos','last'])document.getElementById(k).textContent='– (no project)';
+return;}
 document.getElementById('state').textContent='daemon running · index '+s.index.state;
 for(const k of ['files','nodes','edges'])document.getElementById(k).textContent=s.index[k]??'–';
 document.getElementById('repos').textContent=(s.index.repos||[]).join(', ')||'–';
@@ -661,5 +948,6 @@ module.exports = {
   // Exported for the tests that pin the two guarantees this file now carries:
   // that /rpc refuses a cross-origin write, and that the UI's data routes are
   // computed without a tool call.
-  rpcDenial, composition, capsuleForUi, observationCounts, tailLog, UI_API_ROUTES,
+  rpcDenial, uiDenial, composition, capsuleForUi, observationCounts, tailLog,
+  oversizeRefusal, UI_API_ROUTES,
 };

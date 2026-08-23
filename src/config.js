@@ -15,10 +15,14 @@ function deepMerge(base, over) {
   return out;
 }
 
+// `projectRoot` is optional: the daemon's hub mode owns no project, and there
+// is nothing for it to read a per-project override out of. Defaults plus the
+// environment is the whole answer there, and it must not be spelled by pointing
+// loadConfig at some arbitrary directory that happens to have a .vnodes in it.
 function loadConfig(projectRoot) {
   let cfg = JSON.parse(fs.readFileSync(DEFAULTS_PATH, 'utf8'));
-  const local = path.join(projectRoot, ENGINE_DIR, 'config.json');
-  if (fs.existsSync(local)) {
+  const local = projectRoot ? path.join(projectRoot, ENGINE_DIR, 'config.json') : null;
+  if (local && fs.existsSync(local)) {
     try { cfg = deepMerge(cfg, JSON.parse(fs.readFileSync(local, 'utf8'))); }
     catch (e) { cfg._config_error = `invalid ${local}: ${e.message}`; }
   }
@@ -54,4 +58,17 @@ function engineDir(projectRoot) {
   return dir;
 }
 
-module.exports = { loadConfig, findProjectRoot, engineDir, ENGINE_DIR };
+/**
+ * Where the engine directory would be, without making one.
+ *
+ * `engineDir` is not a getter: it mkdirs `<root>/.vnodes/logs` and writes a
+ * .gitignore, which is correct for the indexer and the CLI and wrong for a read.
+ * uiApi called it on every /ui/api/* request, and once a request can name a
+ * project other than the daemon's own, that becomes the daemon materialising
+ * directories inside somebody else's tree in order to answer a GET.
+ */
+function engineDirPath(projectRoot) {
+  return path.join(projectRoot, ENGINE_DIR);
+}
+
+module.exports = { loadConfig, findProjectRoot, engineDir, engineDirPath, ENGINE_DIR };

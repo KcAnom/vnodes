@@ -1,4 +1,5 @@
 'use strict';
+require('./_registry_home'); // isolates the knowledge-base registry from the developer's real ~/.config
 // Pins the map surface's contracts — the ones a replacement renderer inherits.
 //
 // Scoped deliberately. `src/view/data.js` and `src/view/index.js` are the
@@ -571,7 +572,7 @@ test('an anchored document is drawn: the content filter never eats a pivot', () 
 test('every page the daemon dispatches has a title of its own', () => {
   const { PAGES, renderShell } = require('../src/view/shell');
   assert.deepStrictEqual([...PAGES.keys()],
-    ['/ui', '/ui/map', '/ui/capsule', '/ui/notes', '/ui/index']);
+    ['/ui', '/ui/bases', '/ui/map', '/ui/capsule', '/ui/notes', '/ui/index']);
   for (const [pathname, title] of PAGES) {
     const html = renderShell(pathname);
     assert.match(html, new RegExp(`<title>${title.replace(/[—]/g, '.')}</title>`),
@@ -586,7 +587,7 @@ test('every page the daemon dispatches has a title of its own', () => {
 test('only the map preloads the React Flow chunk', () => {
   const { renderShell, STATIC_DIR } = require('../src/view/shell');
   const split = fs.existsSync(path.join(STATIC_DIR, 'map-App.js'));
-  for (const pathname of ['/ui', '/ui/capsule', '/ui/notes', '/ui/index']) {
+  for (const pathname of ['/ui', '/ui/bases', '/ui/capsule', '/ui/notes', '/ui/index']) {
     assert.ok(!renderShell(pathname).includes('modulepreload'),
       `${pathname} preloads a chunk it does not draw`);
   }

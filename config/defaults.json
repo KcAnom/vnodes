@@ -24,6 +24,15 @@
     "truncate_threshold_mb": 2,
     "level": "warn"
   },
+  "registry": {
+    "_comment": "The knowledge-base registry at $VNODES_HOME/registry, $XDG_CONFIG_HOME/vnodes/registry or ~/.config/vnodes/registry. write_interval_s throttles the snapshot an index run writes; scan_cap bounds the readdir; list_cap bounds the picker's rows; tmp_sweep_s is how long an orphaned atomic-write temp file survives; the two oversize values are where whole-index work (composition, capsule, an unscoped map) is refused with 413 instead of blocking the daemon's only event loop.",
+    "write_interval_s": 60,
+    "scan_cap": 500,
+    "list_cap": 200,
+    "tmp_sweep_s": 3600,
+    "oversize_files": 50000,
+    "oversize_db_mb": 512
+  },
   "ui": {
     "sidebar_refresh_s": 10,
     "map_max_nodes": 150,

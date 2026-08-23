@@ -2,7 +2,24 @@
 // M4 Session Memory. Every tool invocation auto-captured (BR-013); memories
 // auto-surface with a rationale inside pipeline/capsule responses (BR-014);
 // staleness: linked code changed → flagged + demoted, never deleted (BR-015).
-const { openMemory, openStore } = require('./store');
+const { openMemory, openStore, openMemoryReadOnly } = require('./store');
+
+/**
+ * The connection a reader gets.
+ *
+ * `readOnly` is not a hint. openMemory creates memory.db if it is absent and
+ * runs DDL on it, which is correct for an agent recording what it did and wrong
+ * for the /ui surface — a GET may not bring a database into existence inside a
+ * project the reader merely looked at. A read-only caller also skips
+ * refreshStaleness, because that is an UPDATE: the flags it would set are real,
+ * but writing them is the indexer's and the agents' job, not the browser's.
+ */
+function readerDb(engDir, readOnly) {
+  if (!readOnly) return openMemory(engDir);
+  const db = openMemoryReadOnly(engDir);
+  if (!db) throw Object.assign(new Error('no memory store'), { code: 'ENOMEMORYDB' });
+  return db;
+}
 
 function captureObservation(engDir, { session, tool, summary, symbol = null, file = null, kind = 'auto' }) {
   const db = openMemory(engDir);
@@ -42,9 +59,9 @@ function terms(text) {
 // Relevance surface: term overlap between the task and stored observations.
 // Stale observations are demoted (score halved) but still returned with a
 // warning — never silently dropped (BR-015).
-function searchMemory(engDir, query, { session = null, limit = 8 } = {}) {
-  refreshStaleness(engDir);
-  const db = openMemory(engDir);
+function searchMemory(engDir, query, { session = null, limit = 8, readOnly = false } = {}) {
+  if (!readOnly) refreshStaleness(engDir);
+  const db = readerDb(engDir, readOnly);
   const qTerms = terms(query);
   const rows = db.prepare('SELECT * FROM observations ORDER BY ts DESC LIMIT 500').all();
   db.close();
@@ -67,9 +84,9 @@ function searchMemory(engDir, query, { session = null, limit = 8 } = {}) {
   }));
 }
 
-function sessionContext(engDir, { session = null, limit = 20 } = {}) {
-  refreshStaleness(engDir);
-  const db = openMemory(engDir);
+function sessionContext(engDir, { session = null, limit = 20, readOnly = false } = {}) {
+  if (!readOnly) refreshStaleness(engDir);
+  const db = readerDb(engDir, readOnly);
   // Cross-session recall: current and previous sessions both returned (SM-4),
   // but the caller's own session sorts first and each row says whose it is.
   const rows = session

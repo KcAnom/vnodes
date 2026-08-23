@@ -1,5 +1,5 @@
 /**
- * The five pages, as an array.
+ * The six pages, as an array.
  *
  * nodekit registers its verticals through a registry — 496 lines of contracts
  * across fourteen seams — so that a vertical can be deleted or contributed
@@ -11,11 +11,19 @@
  * ARCHITECTURE.md records having made once already. A four-field record with
  * five instances is an array literal. The day a view arrives from outside
  * `ui/src`, this becomes a registry and not a day sooner.
+ *
+ * It is six now, and the sixth is the picker. The path literals in this array
+ * are one half of a bijection `test/ui-readonly.test.js` asserts against
+ * `PAGES` in `src/view/shell.js`, matched by a regex that allows one lowercase
+ * segment under `/ui` — which is the mechanism that made `?kb=` a query
+ * parameter and not a path segment, and the reason `/ui/bases` is spelled the
+ * way it is.
  */
 import { lazy } from 'react'
-import { Database, Gauge, Layers, Network, NotebookPen } from 'lucide-react'
+import { Database, Gauge, Layers, Library, Network, NotebookPen } from 'lucide-react'
 import type { ElementType } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import { Bases } from '../views/Bases'
 import { Overview } from '../views/Overview'
 import { CapsuleView } from '../views/Capsule'
 import { NotesView } from '../views/Notes'
@@ -49,6 +57,13 @@ export type View = {
 }
 
 export const VIEWS: View[] = [
+  {
+    path: '/ui/bases',
+    label: 'bases',
+    hint: 'every knowledge base on this machine',
+    icon: Library,
+    element: Bases,
+  },
   {
     path: '/ui',
     label: 'status',
@@ -90,6 +105,29 @@ export const VIEWS: View[] = [
     tool: 'index_status',
   },
 ]
+
+/**
+ * The picker's path, named once.
+ *
+ * Read off the first entry rather than written out a second time, so this file
+ * contains exactly one `/ui/bases` string. The bijection `test/ui-readonly.test.js`
+ * asserts is between the daemon's `PAGES` and the route literals matched here,
+ * and a path spelled twice is a path that appears twice in whatever the test
+ * collects — which is a difference between the two sides that means nothing.
+ * The picker being first in the array is what makes this correct, and it is
+ * first because it is the landing page.
+ *
+ * It is a `View` like the other five so that `Main` can find it, `NoSuchPage`
+ * can list it and the bijection test can see it — but it is not one of the rail's
+ * five page buttons. The rail reaches it through the KB switcher at the top of
+ * the column, which is where "which project am I looking at" belongs, and a
+ * second control for the same destination three rows below would be two answers
+ * to one question.
+ */
+export const PICKER = VIEWS[0].path
+
+/** The five per-project pages, in rail order. */
+export const PAGE_VIEWS = VIEWS.filter((view) => view.path !== PICKER)
 
 /** The no-JS floor. Reachable from the rail, deliberately not a React route. */
 export const PLAIN_STATUS = '/ui/status'

@@ -55,8 +55,17 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
     case 'daemon': {
       const sub = args.shift() || 'status';
       const d = require('../src/daemon');
-      if (sub === 'run') d.serve(projectRoot);            // foreground (internal)
+      // --hub: serve the registry and no project at all. This is what the macOS
+      // app runs. A hub indexes nothing, watches nothing and claims no pidfile,
+      // so it has no project it could be showing you by mistake.
+      const hub = !!flags.hub;
+      if (sub === 'run') d.serve(hub ? null : projectRoot);  // foreground (internal)
       else if (sub === 'start') {
+        if (hub) {
+          const pid = d.startDetached(null);
+          out(`hub daemon starting pid=${pid} (http://127.0.0.1:${loadConfig(null).mcp.port}/ui/bases)`);
+          break;
+        }
         const st = d.daemonState(projectRoot);
         if (st.running) out(`already running pid=${st.pid} port=${st.port}`);
         else { const pid = d.startDetached(projectRoot); out(`daemon starting pid=${pid} (http://127.0.0.1:${loadConfig(projectRoot).mcp.port})`); }
@@ -134,6 +143,48 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       }
       break;
     }
+    /**
+     * The registry, by hand.
+     *
+     * Every destructive verb lives here and nowhere else. The UI is read-only,
+     * so hiding and forgetting a knowledge base are lines the reader copies —
+     * the same pattern `ignore_suggestion` already establishes for
+     * .vnodesignore. `forget` in particular removes the registry row and prints
+     * the `rm -rf` for the index without running it: vnodes does not delete a
+     * project's data on anyone's behalf.
+     */
+    case 'kb': {
+      const reg = require('../src/registry');
+      const sub = args.shift() || 'list';
+      if (sub === 'list') {
+        const l = reg.listKbs({ launchRoot: null });
+        out(`registry: ${l.registry_dir}`);
+        if (!l.kbs.length) out('(no knowledge bases yet — a project is listed the first time it finishes an index run)');
+        for (const k of l.kbs) {
+          out(`${k.id}  ${k.state.padEnd(15)} ${k.path || '(no path)'}`);
+          out(`${' '.repeat(18)}${k.name}${k.branch ? ` · ${k.branch}` : ''} · ${k.verdict}`);
+          if (k.flags.length) out(`${' '.repeat(18)}flags: ${k.flags.join(', ')}`);
+          if (k.agents.length) out(`${' '.repeat(18)}agents: ${k.agents.map(a => a.name).join(', ')}`);
+        }
+        for (const n of l.notes) out(`note: ${n}`);
+        break;
+      }
+      if (sub === 'register') {
+        const target = path.resolve(args[0] || flags.project || process.cwd());
+        if (!fs.existsSync(path.join(target, '.vnodes', 'index.db'))) {
+          out(`not indexed: ${target}\nrun: cd ${target} && vnodes index`);
+          break;
+        }
+        const r = reg.ensureEntry(target, 'cli');
+        out(r ? { registered: r.id, path: target, already: !r.written } : { error: 'could not register', path: target });
+        break;
+      }
+      if (sub === 'hide') { out(reg.hide(args[0])); break; }
+      if (sub === 'show') { out(reg.show(args[0])); break; }
+      if (sub === 'forget') { out(reg.forget(args[0])); break; }
+      out(`vnodes kb: no subcommand "${sub}". Use: list | register [path] | forget <id> | hide <id> | show <id>`);
+      break;
+    }
     case 'setup': { // agent setup (M5)
       const { setupAgents, detectAgents } = require('../src/agents');
       if (flags.detect) { out(detectAgents().map(a => ({ id: a.id, name: a.name, installed: a.installed }))); break; }
@@ -209,6 +260,30 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
         if (page === 'capsule' && flags.preset) qs.push(`preset=${encodeURIComponent(flags.preset)}`);
         if (page === 'notes' && flags.q) qs.push(`q=${encodeURIComponent(flags.q)}`);
       }
+      /**
+       * Name the project in the URL, instead of relying on which directory the
+       * daemon happened to be launched in.
+       *
+       * That reliance is the original bug stated in CLI form: `vnodes ui` run
+       * inside project A, against a daemon started in project B, opened B. With
+       * ?kb= the link says which knowledge base it is for, so it survives being
+       * pasted somewhere — and bare /ui is now the picker, which is why the
+       * CLI has to say.
+       *
+       * /ui/status is the exception: it is the plain-HTML floor and reports on
+       * the daemon's own project only, so attaching a selector there would be a
+       * URL that promises something the page cannot do.
+       */
+      const scoped = !(cmd === 'ui' && uiPath === '/status');
+      if (scoped) {
+        const kb = require('../src/registry').idForPath(projectRoot);
+        const registered = kb && fs.existsSync(path.join(require('../src/registry').registryDir(), kb, 'kb.json'));
+        if (registered) qs.push(`kb=${kb}`);
+        else {
+          out(`note: ${projectRoot} is not in the knowledge-base registry yet, so this URL falls back to whatever project the daemon was launched in.`);
+          out(`      run: vnodes index --project ${projectRoot}   (indexing is what registers a project)`);
+        }
+      }
       const url = `http://127.0.0.1:${cfg.mcp.port}/ui${cmd === 'map' ? '/map' : uiPath}${qs.length ? `?${qs.join('&')}` : ''}`;
       out(url);
       try { require('node:child_process').execFileSync('open', [url]); } catch {}
@@ -229,16 +304,26 @@ usage: vnodes <command> [args] [--flags]
   flow <from> <to>            dependency path between two files/symbols
   memory [recent|search <q>|save <text> [--file f] [--symbol s]]
   workspace [setup --name N --repos alias=path,...]
+  kb [list|register [path]|forget <id>|hide <id>|show <id>]
+                              the knowledge-base registry: every project this machine has indexed.
+                              a project is registered by INDEXING it; forget removes the row and
+                              prints (never runs) the rm -rf that would remove the index itself
   setup [--detect] [--only claude-code,cursor] [--personal]
-  daemon [start|stop|status]  HTTP transport on cfg.mcp.port (stdio is default)
+  daemon [start|stop|status] [--hub]
+                              HTTP transport on cfg.mcp.port (stdio is default).
+                              --hub serves the registry with no project of its own: it indexes
+                              nothing, watches nothing, and opens on the picker
   call <tool> --args '{...}'  HTTP tool call (auto-starts daemon)
   mcp [project-root]          stdio MCP server (what agents launch)
   doctor                      read-only diagnostics, works with daemon down
   logs [daemon|index] [--follow]
   llm [status|enable|disable|runtime|ask <q>] [--runtime claude-code|pi] [--pi-model grok-4.5-latest|gpt-5.6-sol]
-  ui [page] [args]            open the operator UI. pages: overview (default), map,
-                              capsule "<task>" [--preset p], notes [--q text], index,
-                              status (plain HTML, works with no bundle built)
+  ui [page] [args]            open the operator UI for THIS project (the URL carries ?kb=<id>).
+                              bare http://127.0.0.1:<port>/ui with no ?kb= is the knowledge-base
+                              picker — every indexed project on this machine — and so is /ui/bases.
+                              pages: overview (default), map, capsule "<task>" [--preset p],
+                              notes [--q text], index, status (plain HTML, no bundle needed,
+                              reports on the daemon's own project only)
   map [target|dir] [--path DIR] [--all] [--depth N] [--task "..."]
                               open the live dependency map (scoped to target if given)
                               draws code by default; --all includes markdown, json and config

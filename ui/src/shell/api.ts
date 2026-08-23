@@ -15,7 +15,23 @@
  * literally `{}`. The `/ui/api/*` family exists so the reads can happen without
  * the writes. The strings `save_observation` and `workspace_setup` do not
  * appear anywhere under `ui/src`, and a test asserts it.
+ *
+ * A third rule arrived with the registry: every one of these calls is about one
+ * knowledge base, so every one of them carries `?kb=`. That is the default
+ * rather than something four call sites remember, and the three calls that are
+ * not about a knowledge base opt out by name.
+ *
+ * `/tools` is the daemon's own catalog and `/ui/api/kbs` is the registry
+ * itself; sending a `kb` to either would be a lie about what the request is.
+ * `/status` is the third and it opts out for two reasons at once. It reports on
+ * the daemon and its launch project — that is what `doctor()` reads it for when
+ * probing a foreign daemon on a held port — and it is matched server-side
+ * against the whole request url rather than the pathname, so `/status?kb=…` is
+ * a 404 today. Scoping it would not have quietly reported the wrong project; it
+ * would have taken the rail's health dot and the whole overview page down on
+ * every KB-scoped URL.
  */
+import { withKb } from './kb'
 
 /** GET /status — the one endpoint that predates all of this. */
 export type Status = {
@@ -34,6 +50,90 @@ export type Status = {
     last_index_ms?: number
   }
   workspace: { name?: string; repos?: { alias: string; path: string }[] } | null
+}
+
+/**
+ * What a knowledge base can be, from the picker's point of view.
+ *
+ * `missing` and `unreadable` are deliberately not one state. A project
+ * directory that is gone has been deleted; a `statSync` that threw EACCES or
+ * EIO is an unmounted volume or a permission, and telling a reader their work
+ * was deleted because a drive was not plugged in would be the worst thing this
+ * page could say.
+ */
+export type KbState = 'ok' | 'never_completed' | 'engine_removed' | 'missing' | 'unreadable'
+
+/** The pathologies a row can carry. Every one of them is printed, never summed. */
+export type KbFlag = 'home_dir' | 'no_edges' | 'oversize_files' | 'oversize_db' | 'never_completed'
+
+export type KbAgent = {
+  name: string
+  version?: string
+  last_seen_ms?: number | null
+  sessions?: number
+}
+
+/**
+ * One registry entry, as `/ui/api/kbs` returns it.
+ *
+ * Declared here rather than in `ui/src/map/types.ts` on purpose: the picker is
+ * the landing page, and an import that reached into `ui/src/map` for a type
+ * would pull the map's module graph — React Flow, half the built bytes — into
+ * the entry chunk to satisfy something that erases at compile time in theory
+ * and is far too easy to turn into a real import in practice.
+ *
+ * The count fields are optional because they are a cache of the last completed
+ * index and a KB can be registered without ever having finished one. The page
+ * prints what is present and says what is not; it never renders a zero it was
+ * not given.
+ */
+export type KbRow = {
+  id: string
+  name: string
+  path: string
+  state: KbState
+  /** A sentence the server wrote about `state`. Printed verbatim. */
+  state_detail: string
+  hidden: boolean
+  is_launch: boolean
+  /** `index.db` has been written since the cached counts were taken. */
+  counts_stale: boolean
+  /** The health line, in the server's own words. Printed, never re-derived. */
+  verdict: string
+  flags: KbFlag[]
+  agents: KbAgent[]
+  last_activity_ms: number | null
+  last_indexed_ms?: number | null
+  // Explicitly `| null`, not merely optional: the server writes nulls rather
+  // than omitting keys, so a `!== undefined` guard lets a null straight through.
+  // It did, and the picker threw on the first knowledge base registered without
+  // a completed index.
+  files?: number | null
+  nodes?: number | null
+  edges?: number | null
+  notes?: number | null
+  db_bytes?: number | null
+  languages?: { lang: string; c: number }[]
+  /** The CLI lines that would hide or forget this entry. Shown, never run. */
+  hide_command: string
+  forget_command: string
+}
+
+/** GET /ui/api/kbs — the whole picker, in one global call that takes no `kb`. */
+export type KbList = {
+  registry_dir: string
+  /** True when this daemon was launched with no project of its own. */
+  hub: boolean
+  launch_kb: string | null
+  sort: string
+  scanned: number
+  scan_capped: boolean
+  shown: number
+  hidden_count: number
+  total_db_bytes: number
+  kbs: KbRow[]
+  /** Whatever the server withheld and why. Printed in the footer, always. */
+  notes?: string[]
 }
 
 /** One row of `vnodes doctor`. `detail` is a sentence the CLI already wrote. */
@@ -193,20 +293,22 @@ export type Tools = { tools: { name: string }[] }
  * about `<` — so the content type is checked first and the error says which
  * route the daemon is not serving.
  */
-async function getJson<T>(url: string): Promise<T> {
-  const res = await fetch(url, { headers: { accept: 'application/json' } })
+async function getJson<T>(url: string, { scoped = true }: { scoped?: boolean } = {}): Promise<T> {
+  const target = scoped ? withKb(url) : url
+  const res = await fetch(target, { headers: { accept: 'application/json' } })
   const type = res.headers.get('content-type') ?? ''
-  if (!res.ok) throw new Error(`${url} — ${res.status}`)
+  if (!res.ok) throw new Error(`${target} — ${res.status}`)
   if (!type.includes('json')) {
-    throw new Error(`${url} answered with ${type || 'no content type'}, not JSON`)
+    throw new Error(`${target} answered with ${type || 'no content type'}, not JSON`)
   }
   return res.json() as Promise<T>
 }
 
-export const fetchStatus = () => getJson<Status>('/status')
+export const fetchStatus = () => getJson<Status>('/status', { scoped: false })
 export const fetchHealth = () => getJson<Health>('/ui/api/health')
 export const fetchComposition = () => getJson<Composition>('/ui/api/composition')
-export const fetchTools = () => getJson<Tools>('/tools')
+export const fetchTools = () => getJson<Tools>('/tools', { scoped: false })
+export const fetchKbs = () => getJson<KbList>('/ui/api/kbs', { scoped: false })
 
 export function fetchNotes(q: string, limit = 200): Promise<Notes> {
   const params = new URLSearchParams({ limit: String(limit) })

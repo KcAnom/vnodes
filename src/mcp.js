@@ -29,6 +29,15 @@ function startMcpStdio(projectRootArg) {
     const { id, method, params } = msg;
     try {
       if (method === 'initialize') {
+        // W3. params.clientInfo = {name, version} is the only place in the whole
+        // system where "which agent" exists — the sessions in memory.db are
+        // `mcp-<pid>`, `cli` and `http`, and a PID is not an agent. It was read
+        // for its protocolVersion and thrown away. This fires once per session,
+        // writes nothing unless the project is already registered (an MCP
+        // handshake in an unindexed directory must not create an entry — that
+        // is the mechanism behind the $HOME accident), and can never fail the
+        // handshake.
+        try { require('./registry').recordAgent(projectRoot, params && params.clientInfo); } catch {}
         send({ jsonrpc: '2.0', id, result: {
           protocolVersion: params?.protocolVersion || '2025-06-18',
           capabilities: { tools: {} },

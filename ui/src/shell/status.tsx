@@ -12,14 +12,27 @@
  * that call *does* feed back into the loop is `ui.sidebar_refresh_s`, which is
  * how often `/status` is asked. That key has been in the config since the first
  * milestone with nothing reading it; this is the reader.
+ *
+ * The registry listing joined it for the same reason the `/status` poll is
+ * here. Three components want it at once — the rail's KB switcher, the shell's
+ * unknown-`kb` guard, and the picker itself — and three components fetching it
+ * independently would be three answers that can disagree, on the one page whose
+ * entire job is to say what exists. It is not polled: `/ui/api/kbs` walks the
+ * registry and stats two paths per row, and a registry only changes when an
+ * agent indexes something new. It is fetched on mount and again when the window
+ * regains focus, with a floor of ten seconds between fetches so alt-tabbing
+ * cannot turn a focus handler into a poll.
  */
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { fetchHealth, fetchStatus } from './api'
-import type { Health, Status } from './api'
+import { fetchHealth, fetchKbs, fetchStatus } from './api'
+import type { Health, KbList, Status } from './api'
 
 /** What the config ships as, and what is used when the health call is refused. */
 const DEFAULT_REFRESH_S = 10
+
+/** The shortest gap between two registry reads, however often focus fires. */
+const KBS_MIN_GAP_MS = 10_000
 
 export type Feed = {
   status: Status | null
@@ -27,6 +40,15 @@ export type Feed = {
   health: Health | null
   healthError: string
   refreshMs: number
+  /** The registry listing, or null while it is in flight or refused. */
+  kbs: KbList | null
+  /**
+   * Why the registry could not be read. A daemon that predates the registry
+   * answers `/ui/api/kbs` with the api index, so this is a real and expected
+   * state rather than a bug — and every reader of it degrades to what it did
+   * before rather than blocking the page on it.
+   */
+  kbsError: string
 }
 
 const FeedContext = createContext<Feed>({
@@ -35,6 +57,8 @@ const FeedContext = createContext<Feed>({
   health: null,
   healthError: '',
   refreshMs: DEFAULT_REFRESH_S * 1000,
+  kbs: null,
+  kbsError: '',
 })
 
 export function StatusFeed({ children }: { children: ReactNode }) {
@@ -75,9 +99,37 @@ export function StatusFeed({ children }: { children: ReactNode }) {
     }
   }, [refreshMs])
 
+  const [kbs, setKbs] = useState<KbList | null>(null)
+  const [kbsError, setKbsError] = useState('')
+  const lastKbs = useRef(0)
+  const alive = useRef(true)
+
+  const readKbs = useCallback(() => {
+    const now = Date.now()
+    if (now - lastKbs.current < KBS_MIN_GAP_MS) return
+    lastKbs.current = now
+    fetchKbs()
+      .then((next) => {
+        if (!alive.current) return
+        setKbs(next)
+        setKbsError('')
+      })
+      .catch((cause: Error) => alive.current && setKbsError(cause.message))
+  }, [])
+
+  useEffect(() => {
+    alive.current = true
+    readKbs()
+    window.addEventListener('focus', readKbs)
+    return () => {
+      alive.current = false
+      window.removeEventListener('focus', readKbs)
+    }
+  }, [readKbs])
+
   const value = useMemo(
-    () => ({ status, statusError, health, healthError, refreshMs }),
-    [status, statusError, health, healthError, refreshMs],
+    () => ({ status, statusError, health, healthError, refreshMs, kbs, kbsError }),
+    [status, statusError, health, healthError, refreshMs, kbs, kbsError],
   )
   return <FeedContext.Provider value={value}>{children}</FeedContext.Provider>
 }

@@ -14,7 +14,10 @@
  */
 import { cn } from '../kit/utils'
 
-export type Segment = { key: string; label: string; value: number; color: string }
+export type Segment = { key: string; label: string; value: number | null; color: string }
+
+/** Never throws on a missing count; see the note in views/Bases.tsx. */
+const show = (value: number | null) => (value == null ? '—' : value.toLocaleString())
 
 /** `--group-1` … `--group-5`, then `--group-0`, the muted catch-all. */
 export function rampColor(index: number, count = 5): string {
@@ -43,8 +46,8 @@ export function StackedBar({
       {segments.map((segment) => (
         <span
           key={segment.key}
-          title={`${segment.label}: ${segment.value.toLocaleString()}`}
-          style={{ width: `${(segment.value / safe) * 100}%`, background: segment.color }}
+          title={`${segment.label}: ${show(segment.value)}`}
+          style={{ width: `${((segment.value ?? 0) / safe) * 100}%`, background: segment.color }}
           className="h-full"
         />
       ))}
@@ -65,8 +68,8 @@ export function BarLegend({ segments, total }: { segments: Segment[]; total: num
             className="inline-block size-2 rounded-[2px]"
           />
           {segment.label}
-          <b className="text-foreground">{segment.value.toLocaleString()}</b>
-          <span>{Math.round((segment.value / safe) * 100)}%</span>
+          <b className="text-foreground">{show(segment.value)}</b>
+          <span>{Math.round(((segment.value ?? 0) / safe) * 100)}%</span>
         </li>
       ))}
     </ul>

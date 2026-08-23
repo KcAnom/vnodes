@@ -12,6 +12,17 @@
  * them in the client would let `vnodes doctor` and this page disagree about the
  * same check, which is the failure the server-computed map layout exists to
  * prevent, one layer up.
+ *
+ * The counts come from two different places depending on the URL, and that is
+ * deliberate rather than a leftover. `/status` describes the daemon and the
+ * project it was launched in — it is what `doctor()` reads when it finds a held
+ * port, and it is matched server-side on the whole request url, so it neither
+ * takes a `kb` nor could be given one. Everything else on this page (`doctor`,
+ * the log tails, the composition histogram) is scoped to `?kb=`. Reading the
+ * headline from `/status` while the panels below it described a different
+ * project would be a page whose two halves are about two projects and say so
+ * nowhere. So when a KB is named, the headline is read from that KB's registry
+ * row instead, and labelled as the cache it is.
  */
 import { useEffect, useState } from 'react'
 import { Check, X } from 'lucide-react'
@@ -21,14 +32,22 @@ import { Copyable } from '../shell/Copyable'
 import { Stat } from '../shell/Stat'
 import { Link } from '../shell/route'
 import { useFeed } from '../shell/status'
+import { useKb } from '../shell/kb'
 import { fetchComposition } from '../shell/api'
-import type { Composition, DoctorCheck } from '../shell/api'
+import type { Composition, DoctorCheck, Status } from '../shell/api'
 import { relativeTime } from '../shell/time'
 import { Centered } from '../shell/Centered'
 import { cn } from '../kit/utils'
 
 export function Overview() {
-  const { status, statusError, health, healthError, refreshMs } = useFeed()
+  const { status, statusError, health, healthError, refreshMs, kbs } = useFeed()
+  const kb = useKb()
+  /**
+   * The registry row for the KB in the URL, when it is not the one this daemon
+   * was launched in. Null the rest of the time, and then this page reads
+   * `/status` exactly as it always has.
+   */
+  const row = kb && kbs && kb !== kbs.launch_kb ? kbs.kbs.find((r) => r.id === kb) : undefined
 
   /**
    * Fetched once, and only for the headline. The counts on this page poll;
@@ -62,7 +81,25 @@ export function Overview() {
     )
   }
 
-  const index = status.index
+  /**
+   * The index the rest of this page is about. A registry row carries the same
+   * fields under the same names, so nothing below has to know which source it
+   * got them from — only that `stale` is true when they are a cache rather
+   * than a live read, which is stated on the page rather than smoothed over.
+   */
+  const index: Status['index'] = row
+    ? {
+        state: row.state === 'ok' ? 'ready' : row.state,
+        files: row.files ?? 0,
+        nodes: row.nodes ?? 0,
+        edges: row.edges ?? 0,
+        repos: [],
+        languages: row.languages ?? [],
+        last_index: row.last_indexed_ms ?? null,
+      }
+    : status.index
+  const project = row ? row.path : status.project
+  const stale = Boolean(row)
   const langs = index.languages ?? []
   const langTotal = langs.reduce((sum, row) => sum + row.c, 0)
   const segments: Segment[] = langs.map((row, position) => ({
@@ -79,9 +116,18 @@ export function Overview() {
     <div className="flex flex-col gap-6">
       <header>
         <h1 className="text-[17px]">status</h1>
-        <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">
-          {status.project}
-        </p>
+        <p className="mt-0.5 font-mono text-[11px] break-all text-muted-foreground">{project}</p>
+        {stale && (
+          // Said once, at the top, rather than hung off each number. These come
+          // from the registry's cache of the last completed index, because
+          // `/status` can only ever describe the project this daemon was
+          // started in and that is not the project on this page.
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            counts as of this project's last completed index — <code>/status</code> reports on{' '}
+            <span className="font-mono">{status.project}</span>, the project this daemon was started
+            in.
+          </p>
+        )}
       </header>
 
       {/* The verdict. One sentence, and it is allowed to be uncomfortable. */}

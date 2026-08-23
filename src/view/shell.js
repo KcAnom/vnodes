@@ -61,6 +61,10 @@ function readAsset(name) {
  */
 const PAGES = new Map([
   ['/ui', 'vnodes — overview'],
+  // The picker. Reachable from anywhere, including from inside a knowledge
+  // base, which is why it is its own URL and not only what bare /ui falls back
+  // to. One lowercase segment, so the ui-readonly bijection regex still sees it.
+  ['/ui/bases', 'vnodes — knowledge bases'],
   ['/ui/map', 'vnodes — dependency map'],
   ['/ui/capsule', 'vnodes — capsule preview'],
   ['/ui/notes', 'vnodes — notes'],

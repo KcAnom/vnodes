@@ -17,16 +17,27 @@
  * And the pages report numbers that agents reach through MCP tools. If the
  * daemon has stopped exposing one of those tools, the page is still correct and
  * the agents are still broken, and only the page can say so.
+ *
+ * The third job is new, and it is the reason `?kb=` can be trusted. Every one
+ * of the five pages is scoped to one knowledge base, and not one of them knows
+ * what a knowledge base is: the guard below decides, once, whether the `kb` in
+ * the URL names something that exists, and a view that would have drawn the
+ * wrong project's numbers never mounts. It must not fall back to the launch
+ * project when the id does not resolve. A 200 drawn from a different project
+ * under the sender's URL is a wrong page that looks right — the same failure
+ * `src/daemon.js` already closed once for pathnames, arriving a second time
+ * through a query parameter.
  */
 import { Component, Suspense, useEffect, useState } from 'react'
 import type { ErrorInfo, ReactNode } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, Library } from 'lucide-react'
 import { Centered } from './Centered'
 import { Rail } from './Rail'
 import { Link, useRoute } from './route'
-import { PLAIN_STATUS, VIEWS } from './routes'
-import { StatusFeed } from './status'
+import { PICKER, PLAIN_STATUS, VIEWS } from './routes'
+import { StatusFeed, useFeed } from './status'
 import { fetchTools } from './api'
+import { useKb } from './kb'
 
 export function Shell() {
   return (
@@ -41,9 +52,30 @@ export function Shell() {
 
 function Main() {
   const { path } = useRoute()
+  const kb = useKb()
+  const { kbsError } = useFeed()
   // `/` only happens under `npm run dev`; the daemon serves the bundle at /ui.
-  const wanted = path === '/' ? '/ui' : path
+  const requested = path === '/' ? '/ui' : path
+  /**
+   * Bare `/ui` is the picker now.
+   *
+   * Resolved here rather than by a redirect, because a `replaceState` would
+   * rewrite the address bar out from under a reader who typed `/ui`, and every
+   * link vnodes has ever printed points at that exact string. The URL stays
+   * what they asked for; only what is drawn under it changes, and the picker's
+   * first row says in words what used to be there.
+   *
+   * Not when the registry cannot be read at all, though. A daemon older than
+   * `/ui/api/kbs` serves exactly one project and has nothing to pick between,
+   * so turning its front page into a list that cannot be built would replace a
+   * working overview with an error — and `/ui` is the URL `bin/vnodes.js` has
+   * printed since the first milestone. There is nothing to choose, so the
+   * choice is not offered; `/ui/bases` still explains itself to anyone who asks
+   * for it by name.
+   */
+  const wanted = requested === '/ui' && !kb && !kbsError ? PICKER : requested
   const view = VIEWS.find((candidate) => candidate.path === wanted)
+  const scoped = Boolean(view) && wanted !== PICKER
 
   return (
     <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -53,22 +85,115 @@ function Main() {
           <Document>
             <NoSuchPage path={path} />
           </Document>
-        ) : view.canvas ? (
-          // The canvas owns its box and does not scroll: React Flow pans.
-          <div className="map-surface h-full w-full">
-            <MapBoundary>
-              <Suspense fallback={<Centered>drawing…</Centered>}>
-                <view.element />
-              </Suspense>
-            </MapBoundary>
-          </div>
         ) : (
-          <Document>
-            <view.element />
-          </Document>
+          <KbGuard scoped={scoped} kb={kb}>
+            {view.canvas ? (
+              // The canvas owns its box and does not scroll: React Flow pans.
+              <div className="map-surface h-full w-full">
+                <MapBoundary>
+                  <Suspense fallback={<Centered>drawing…</Centered>}>
+                    <view.element />
+                  </Suspense>
+                </MapBoundary>
+              </div>
+            ) : (
+              <Document>
+                <view.element />
+              </Document>
+            )}
+          </KbGuard>
         )}
       </div>
     </main>
+  )
+}
+
+/**
+ * One gate in front of the five scoped pages, so no view ever learns what a
+ * knowledge base is.
+ *
+ * Three outcomes, and the ordering between them matters.
+ *
+ * A `kb` in the URL that the registry does not list is refused outright — the
+ * view does not mount, does not fetch, and does not draw a graph. That is the
+ * whole point: the failure this closes is a link from another machine, whose
+ * ids are different, rendering as somebody else's project under a URL that
+ * looks like it worked.
+ *
+ * A daemon in hub mode with no `kb` in the URL has no project to be scoped to
+ * at all, so the page says so and points at the picker rather than showing five
+ * empty panels and letting the reader conclude their index is broken.
+ *
+ * And a registry that cannot be read at all decides nothing. A daemon older
+ * than `/ui/api/kbs` answers it with an api index, which is not evidence about
+ * any particular id — so the guard steps aside and the page behaves exactly as
+ * it did before the registry existed.
+ */
+function KbGuard({ scoped, kb, children }: { scoped: boolean; kb: string; children: ReactNode }) {
+  const { kbs, kbsError } = useFeed()
+
+  if (!scoped || kbsError) return <>{children}</>
+
+  if (kb) {
+    // Still in flight. Rendering the view now and pulling it back a moment
+    // later would open an EventSource against a KB that may not exist and
+    // flash a graph the reader is about to be told is the wrong one.
+    if (!kbs) return <Centered>checking which knowledge base that is…</Centered>
+    if (!kbs.kbs.some((row) => row.id === kb)) return <UnknownKb id={kb} />
+    return <>{children}</>
+  }
+
+  if (kbs?.hub) return <HubHasNoProject />
+  return <>{children}</>
+}
+
+function UnknownKb({ id }: { id: string }) {
+  const { kbs } = useFeed()
+  return (
+    <Centered>
+      <p className="mb-1 text-[15px]">no knowledge base with that id</p>
+      <p className="font-mono text-[12px] break-all text-muted-foreground">{id}</p>
+      <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+        A <code className="font-mono">?kb=</code> is a key in this machine's registry, not a path,
+        and every machine derives its own. This is what a link from somebody else's laptop looks
+        like here — the project it names may well be on this disk under a different id.
+      </p>
+      {kbs && kbs.kbs.length > 0 && (
+        <ul className="mt-4 flex flex-col items-center gap-1 text-[13px]">
+          {kbs.kbs.slice(0, 8).map((row) => (
+            <li key={row.id}>
+              <Link to={`/ui?kb=${row.id}`} className="text-accent hover:underline">
+                {row.name}
+              </Link>{' '}
+              <span className="font-mono text-[11px] text-muted-foreground">{row.path}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-4 text-[13px]">
+        <Link to={PICKER} className="text-accent hover:underline">
+          every knowledge base on this machine →
+        </Link>
+      </p>
+    </Centered>
+  )
+}
+
+function HubHasNoProject() {
+  return (
+    <Centered>
+      <Library className="mx-auto mb-2 size-5 text-muted-foreground" />
+      <p className="mb-1 text-[15px]">this daemon serves the registry and no project of its own</p>
+      <p className="text-[13px] leading-relaxed text-muted-foreground">
+        It was started without a launch project, so there is nothing for this page to be about until
+        one is named. Every page here works once a knowledge base is chosen.
+      </p>
+      <p className="mt-3 text-[13px]">
+        <Link to={PICKER} className="text-accent hover:underline">
+          pick one →
+        </Link>
+      </p>
+    </Centered>
   )
 }
 

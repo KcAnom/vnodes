@@ -1,4 +1,5 @@
 'use strict';
+require('./_registry_home'); // isolates the knowledge-base registry from the developer's real ~/.config
 // Pins the capsule contracts: the token budget is a hard cap (oversized pivots
 // clip, never overflow), and test files cannot win pivot selection outside
 // debug intent.

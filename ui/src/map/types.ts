@@ -118,4 +118,14 @@ export type MapQuery = {
    * `readQuery` the client dropped it on every redraw.
    */
   compact?: string
+  /**
+   * Which knowledge base this map is of — a registry key, never a path.
+   *
+   * It lives on `MapQuery` rather than being threaded through by hand because
+   * `queryString()` is what builds every URL this page emits: the first fetch,
+   * the EventSource, and every link the toolbar and the notices offer. One
+   * field here is what carries it into all of them at once, and a URL with no
+   * `kb` still serialises byte-identically to what it did before.
+   */
+  kb?: string
 }

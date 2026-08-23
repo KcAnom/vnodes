@@ -257,6 +257,64 @@ const CHECKS = [
                                  : bad('drew nothing but did not say why: ' + JSON.stringify(t.slice(0, 120)))
     `,
   },
+  // --- the picker and the kb parameter -------------------------------------
+  {
+    page: '/ui/bases',
+    name: 'every knowledge base row states its health',
+    promise: 'no row is a name you have to open to find out about',
+    body: `
+      const list = await (await fetch('/ui/api/kbs')).json()
+      if (!list.kbs?.length) return ok('no knowledge bases registered — nothing to state')
+      const rows = [...document.querySelectorAll('ul li')].filter(li => li.innerText.trim())
+      const named = list.kbs.filter(kb => text().includes(kb.verdict))
+      return named.length === list.kbs.length
+        ? ok(named.length + ' of ' + list.kbs.length + ' rows carry their verdict verbatim')
+        : bad((list.kbs.length - named.length) + ' of ' + list.kbs.length + ' rows drawn without the health verdict the server sent (' + rows.length + ' rows in the DOM)')
+    `,
+  },
+  {
+    page: '/ui/bases',
+    name: 'the picker states its own sort order',
+    promise: 'a list nobody has to guess the ranking of',
+    body: `
+      const t = text()
+      return /most recently used first|by path, alphabetical/.test(t)
+        ? ok('order stated in the header')
+        : bad('the header does not say what order these are in: ' + JSON.stringify(t.slice(0, 160)))
+    `,
+  },
+  {
+    page: '/ui/bases',
+    name: 'nothing on the picker writes',
+    promise: 'opening a page never indexes, deletes or forgets anything',
+    body: `
+      // The exact shape of the accident this page exists to surface: one
+      // read-only tool call, made while standing somewhere nobody meant to
+      // index, is what created a 541,275-file knowledge base.
+      const posts = [...document.querySelectorAll('form')].filter(f => (f.method || '').toLowerCase() === 'post')
+      if (posts.length) return bad(posts.length + ' post form(s) on the picker')
+      const acting = [...document.querySelectorAll('button')]
+        .filter(b => /index|delete|forget|remove|rebuild/i.test(b.innerText))
+        // A Copyable is a button whose whole job is to put text on the
+        // clipboard; its label IS the command, and that is the point.
+        .filter(b => (b.title || '') !== 'copy' && (b.title || '') !== 'copied')
+      return acting.length
+        ? bad('buttons that read as actions: ' + acting.map(b => JSON.stringify(b.innerText)).join(', '))
+        : ok('no post form, and no button that offers to change anything')
+    `,
+  },
+  {
+    page: '/ui/map?kb=0000000000000000',
+    name: 'an unresolvable kb says so and draws nothing',
+    promise: 'never silently falls back to the launch project',
+    body: `
+      if (nodes().length) return bad('drew ' + nodes().length + ' nodes for a kb that resolves to nothing')
+      const t = text()
+      return /no knowledge base with that id/i.test(t)
+        ? ok('names the id and draws no graph')
+        : bad('drew no graph but did not say why: ' + JSON.stringify(t.slice(0, 160)))
+    `,
+  },
   {
     page: '/ui/map?task=wire%20a%20new%20agent%20into%20setup',
     name: 'the capsule overlay explains itself',
@@ -273,9 +331,68 @@ const CHECKS = [
   },
 ]
 
+/**
+ * The two checks that stop `kb` being silently deleted again.
+ *
+ * Both submit paths on the map replace the whole query string — the toolbar's
+ * form is a real GET navigation with no `preventDefault`, and "clear" is a raw
+ * anchor — so each of them is a place the parameter can be dropped without
+ * anything visible happening except a different project appearing.
+ *
+ * The id is resolved from the registry rather than written down, because ids
+ * are `sha256(realpath)` and differ on every machine.
+ */
+const liveKb = await (async () => {
+  try {
+    const list = await (await fetch(ORIGIN + '/ui/api/kbs')).json()
+    return (list.kbs || []).map((row) => row.id).find((id) => /^[0-9a-f]{16}$/.test(id)) || ''
+  } catch {
+    return ''
+  }
+})()
+
+if (liveKb) {
+  CHECKS.push({
+    page: `/ui/map?path=src&kb=${liveKb}`,
+    name: 'drawing again keeps the knowledge base',
+    promise: 'redrawing a map never changes which project it is of',
+    body: `
+      const form = document.querySelector('form[action="/ui/map"]')
+      if (!form) return bad('no map query form')
+      // The submission is computed rather than performed. Pressing the button
+      // is a real navigation, and a navigation tears down the context this
+      // check is running in — the first version of this reported "Inspected
+      // target navigated or closed" and took the next check down with it by
+      // leaving the page somewhere else. A GET form submits exactly its named
+      // inputs, so FormData over the form IS the query string the browser
+      // would build, and a missing hidden input fails here identically.
+      const submitted = new URLSearchParams([...new FormData(form)].filter(([, v]) => v))
+      const kept = submitted.get('kb')
+      return kept === ${JSON.stringify(liveKb)}
+        ? ok('the draw button submits ?' + submitted.toString())
+        : bad('drawing would navigate to /ui/map?' + submitted.toString() + ' — kb is ' + JSON.stringify(kept) + ', expected ' + ${JSON.stringify(liveKb)})
+    `,
+  })
+  CHECKS.push({
+    page: `/ui/map?path=src&kb=${liveKb}`,
+    name: 'clearing the query keeps the knowledge base',
+    promise: 'dropping a path filter is not also a change of project',
+    body: `
+      const clear = [...document.querySelectorAll('a')].find(a => a.innerText.trim() === 'clear')
+      if (!clear) return bad('no clear link — the map was not drawn scoped')
+      const target = new URL(clear.href)
+      return target.searchParams.get('kb') === ${JSON.stringify(liveKb)}
+        ? ok('the clear link carries the kb: ' + target.pathname + target.search)
+        : bad('clear points at ' + target.pathname + target.search + ' — the kb is gone')
+    `,
+  })
+} else {
+  console.log('\x1b[33m•\x1b[0m kb checks skipped — /ui/api/kbs listed no knowledge base to name')
+}
+
 // The shell pages share one contract, so it is checked once per page rather
 // than written out five times.
-const SHELL_PAGES = ['/ui', '/ui/capsule?task=wire%20a%20new%20agent%20into%20setup', '/ui/notes', '/ui/index', '/ui/map']
+const SHELL_PAGES = ['/ui', '/ui/capsule?task=wire%20a%20new%20agent%20into%20setup', '/ui/notes', '/ui/index', '/ui/map', '/ui/bases']
 
 for (const page of SHELL_PAGES) {
   CHECKS.push({
@@ -294,8 +411,14 @@ for (const page of SHELL_PAGES) {
     name: 'the rail reaches every page',
     promise: 'no page is a dead end',
     body: `
+      // Pathnames only, and an exact-match list. This assertion, the
+      // ui-readonly bijection regex, and the daemon's PAGES.has(url.pathname)
+      // are the three exact-match mechanisms that made ?kb= a query
+      // parameter instead of a path segment, so this comparison must keep
+      // ignoring the query string. It already tolerates extra rail links, so
+      // the KB switcher needs nothing here beyond its own destination.
       const links = [...document.querySelectorAll('nav a')].map(a => new URL(a.href).pathname)
-      const want = ['/ui', '/ui/map', '/ui/capsule', '/ui/notes', '/ui/index']
+      const want = ['/ui', '/ui/map', '/ui/capsule', '/ui/notes', '/ui/index', '/ui/bases']
       const missing = want.filter(w => !links.includes(w))
       return missing.length ? bad('rail is missing ' + missing.join(', ')) : ok(links.length + ' rail links')
     `,

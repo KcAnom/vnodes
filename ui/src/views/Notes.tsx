@@ -28,6 +28,7 @@ import { Centered } from '../shell/Centered'
 import { Input } from '../shell/Input'
 import { Stat } from '../shell/Stat'
 import { Link, navigate, useRoute } from '../shell/route'
+import { useKb } from '../shell/kb'
 import { fetchNotes } from '../shell/api'
 import type { Memory, Notes } from '../shell/api'
 import { relativeTime } from '../shell/time'
@@ -47,6 +48,7 @@ const byUrgency = (a: Memory, b: Memory) =>
 export function NotesView() {
   const { params } = useRoute()
   const q = params.get('q') ?? ''
+  const kb = useKb()
 
   const [draft, setDraft] = useState(q)
   useEffect(() => setDraft(q), [q])
@@ -109,7 +111,15 @@ export function NotesView() {
         <form
           onSubmit={(event) => {
             event.preventDefault()
-            navigate(`/ui/notes${draft ? `?q=${encodeURIComponent(draft)}` : ''}`)
+            // The same fresh-string build as the capsule form's submit — a URL
+            // assembled from the draft alone knows nothing about the knowledge
+            // base — without the no-JS fallback, since this form has no
+            // `action` and searching here is JavaScript or nothing.
+            const next = new URLSearchParams()
+            if (draft) next.set('q', draft)
+            if (kb) next.set('kb', kb)
+            const encoded = next.toString()
+            navigate(`/ui/notes${encoded ? `?${encoded}` : ''}`)
           }}
           className="sticky top-0 z-[var(--z-chrome)] -mx-1 bg-background px-1 py-1"
         >

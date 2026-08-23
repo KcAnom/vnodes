@@ -29,6 +29,7 @@ import { GutterEdge } from './GutterEdge'
 import { Notices } from './Notices'
 import { Toolbar } from './Toolbar'
 import { fetchMap, queryString, readQuery, subscribe } from './api'
+import type { MapHello } from './api'
 import { Centered } from '../shell/Centered'
 import { navigate, useRoute } from '../shell/route'
 import type { MapEdge, MapPayload, MapQuery } from './types'
@@ -124,14 +125,22 @@ export function App() {
   const [payload, setPayload] = useState<MapPayload | null>(null)
   const [error, setError] = useState('')
   const [live, setLive] = useState(false)
+  /**
+   * What the stream said about itself on connect, or null from a daemon that
+   * does not say. Kept separate from `live` because they answer different
+   * questions: `live` is whether this socket is attached, and this is whether
+   * anything is indexing the knowledge base on the other end of it.
+   */
+  const [hello, setHello] = useState<MapHello | null>(null)
   const [filter, setFilter] = useState('')
   const [selected, setSelected] = useState<string | null>(null)
 
   useEffect(() => {
+    setHello(null)
     fetchMap(query)
       .then(setPayload)
       .catch((cause: Error) => setError(cause.message))
-    return subscribe(query, setPayload, setLive)
+    return subscribe(query, setPayload, setLive, setHello)
   }, [query])
 
   const scope = useCallback(
@@ -145,7 +154,7 @@ export function App() {
 
   if (error) return <Fatal message={error} />
   if (!payload) return <Loading />
-  if (payload.unresolved) return <Unresolved target={payload.target} />
+  if (payload.unresolved) return <Unresolved target={payload.target} query={query} />
   if (payload.nodes.length === 0) return <Unindexed />
 
   return (
@@ -156,6 +165,7 @@ export function App() {
         filter={filter}
         onFilter={setFilter}
         live={live}
+        hello={hello}
         selected={selected}
         onSelect={setSelected}
         onScope={scope}
@@ -188,6 +198,7 @@ function Graph({
   filter,
   onFilter,
   live,
+  hello,
   selected,
   onSelect,
   onScope,
@@ -197,6 +208,7 @@ function Graph({
   filter: string
   onFilter: (next: string) => void
   live: boolean
+  hello: MapHello | null
   selected: string | null
   onSelect: (file: string | null) => void
   onScope: (file: string) => void
@@ -461,6 +473,7 @@ function Graph({
         filter={filter}
         onFilter={onFilter}
         live={live}
+        hello={hello}
         onHeight={setHeaderHeight}
       />
       <Notices payload={payload} query={query} onHeight={setNoticesHeight} />
@@ -496,7 +509,7 @@ function Fatal({ message }: { message: string }) {
   )
 }
 
-function Unresolved({ target }: { target: string }) {
+function Unresolved({ target, query }: { target: string; query: MapQuery }) {
   return (
     <Centered>
       <p className="mb-1 text-[15px]">no match</p>
@@ -506,7 +519,11 @@ function Unresolved({ target }: { target: string }) {
         an exported symbol name.
       </p>
       <p className="mt-3">
-        <a className="text-accent hover:underline" href="/ui/map">
+        {/* A raw anchor rather than a Link, because leaving an unresolved
+            target means leaving the mounted query behind entirely — and it
+            still has to keep the KB, or clearing a bad target would quietly
+            change which project is drawn. */}
+        <a className="text-accent hover:underline" href={`/ui/map${queryString({ kb: query.kb })}`}>
           draw the whole project
         </a>
       </p>

@@ -1,4 +1,5 @@
 'use strict';
+require('./_registry_home'); // isolates the knowledge-base registry from the developer's real ~/.config
 /**
  * "The UI is read-only" as a checkable fact.
  *
@@ -95,6 +96,57 @@ test('the read-only dispatch refuses the write tools and records nothing', () =>
   callToolReadOnly(root, 'index_status', {});
   callToolReadOnly(root, 'get_session_context', { limit: 5 });
   assert.strictEqual(count(), before, 'a read through callToolReadOnly wrote an observation');
+});
+
+test('the entry chunk does not drag React Flow onto every page', () => {
+  // The lazy split is held by exactly one boundary — the dynamic import in
+  // ui/src/shell/routes.ts — and nothing outside ui/src/map/ may statically
+  // import the map. One `import { queryString } from '../map/api'` in a picker
+  // that wants to show per-knowledge-base counts pulls a 204 KB React Flow
+  // chunk back into the entry, on a landing page that never draws a graph, and
+  // nobody diffs a minified bundle.
+  const entry = path.join(ROOT, 'src', 'view', 'static', 'map.js');
+  if (!fs.existsSync(entry)) {
+    console.error('SKIP: src/view/static/map.js not present; bundle split unchecked');
+    return;
+  }
+  const text = fs.readFileSync(entry, 'utf8');
+  for (const name of ['xyflow', 'react-flow', 'reactflow']) {
+    assert.ok(!text.toLowerCase().includes(name),
+      `the entry chunk contains ${name}: the map is no longer lazily loaded, and every page now pays for it`);
+  }
+});
+
+test('the client reads every map query key the server honours', () => {
+  /**
+   * The mechanical fix for a bug that has already shipped once.
+   *
+   * `compact` was added to the server's map query and the client's reader never
+   * learned to parse it, so a link carrying it drew something other than what
+   * its author was looking at — silently, because a query parameter nobody
+   * reads looks exactly like a query parameter nobody set. Scraping both sides
+   * is what stops the next added parameter from vanishing the same way.
+   */
+  const serverFile = path.join(ROOT, 'src', 'view', 'index.js');
+  const serverKeys = new Set([...fs.readFileSync(serverFile, 'utf8')
+    .matchAll(/\bquery\.([a-z_]+)/g)].map(m => m[1]));
+  // Resolved by the daemon before mapView is ever called, so it never appears
+  // as `query.kb` in the file above — but the client still has to send it, or
+  // every map view silently falls back to the daemon's own project.
+  serverKeys.add('kb');
+  assert.ok(serverKeys.size > 3, 'the scrape found almost nothing — the check itself is broken');
+
+  const clientFile = path.join(ROOT, 'ui', 'src', 'map', 'api.ts');
+  if (!fs.existsSync(clientFile)) {
+    console.error('SKIP: ui/src/map/api.ts not present; map query agreement unchecked');
+    return;
+  }
+  const client = fs.readFileSync(clientFile, 'utf8');
+  const literals = new Set([...client.matchAll(/["'`]([a-z_]+)["'`]/g)].map(m => m[1]));
+  for (const key of serverKeys) {
+    assert.ok(literals.has(key),
+      `/ui/map/data honours ?${key}= and ui/src/map/api.ts never names it; a link carrying it draws something else`);
+  }
 });
 
 test('server pages and client routes are the same set', () => {

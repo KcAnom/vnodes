@@ -3,6 +3,7 @@
 // the HTTP daemon. All tools unconditionally available (BR-029). Every
 // invocation is auto-captured as an observation (BR-013).
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadConfig, engineDir } = require('./config');
 const { runIndex, indexStatus } = require('./indexer');
@@ -37,6 +38,28 @@ const TOOL_DEFS = [
 ];
 
 function ensureIndexed(projectRoot, cfg) {
+  /**
+   * $HOME is not a project, and auto-indexing it is how vnodes indexed 541,275
+   * files and 3.67M nodes without anyone being told.
+   *
+   * findProjectRoot walks up looking for .vnodes or .git, so an agent standing
+   * anywhere under the home directory with neither in its ancestry resolves to
+   * the home directory itself, and one index_status call was enough to start
+   * the walk. Worse, it is self-reinforcing: once ~/.vnodes exists, every
+   * future walk-up terminates there. This is one branch, and it is detection,
+   * not deletion — nothing here removes anything, and an explicit
+   * `vnodes index --project ~` still works because that path does not come
+   * through ensureIndexed.
+   *
+   * The check is before indexStatus, not after: indexStatus opens the store,
+   * and against the home knowledge base that alone was measured at 5.8 seconds.
+   */
+  if (path.resolve(projectRoot) === path.resolve(os.homedir())) {
+    return {
+      state: 'refused',
+      reason: 'this is your home directory, not a project — vnodes resolved it by walking up from a directory with no .git. Index a real project: vnodes index --project <path>',
+    };
+  }
   // Indexing starts automatically — no explicit init step (BR-002).
   const st = indexStatus(projectRoot);
   if (st.state === 'uninitialized') runIndex(projectRoot, cfg);

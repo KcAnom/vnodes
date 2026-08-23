@@ -25,14 +25,17 @@
  * and it gives the four document pages a normal scrolling column instead of a
  * page that has to pretend it is a canvas.
  */
+import { ChevronsUpDown } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '../kit/utils'
+import { useKb } from './kb'
 import { Link, useRoute } from './route'
-import { PLAIN_STATUS, VIEWS } from './routes'
+import { PAGE_VIEWS, PICKER, PLAIN_STATUS, VIEWS } from './routes'
 import { useFeed } from './status'
 
 export function Rail() {
   const { path } = useRoute()
+  const kb = useKb()
   const { status, statusError } = useFeed()
 
   const state = status?.index.state ?? ''
@@ -55,21 +58,26 @@ export function Rail() {
       aria-label="vnodes sections"
       className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-border bg-rail py-3 max-lg:w-[52px]"
     >
-      {/* The project mark. A dot on a light square, so it holds in either
-          theme without a second asset and without a network request. */}
-      <div className="mb-3 flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-white">
-        <span className="size-2 rounded-full bg-[#111111]" />
-      </div>
+      <Switcher kb={kb} />
 
-      {VIEWS.map((view) => (
+      {PAGE_VIEWS.map((view) => (
         <RailLink
           key={view.path}
-          to={view.path}
+          // Built explicitly rather than left to the router's normalizer. Both
+          // produce the same string, but this is the one place where being able
+          // to read the rendered href and see the project in it is the whole
+          // reason the parameter exists — and a normalizer is a thing that can
+          // be changed by somebody who never opened this file.
+          to={view.path + (kb ? `?kb=${kb}` : '')}
           icon={view.icon}
           label={view.label}
           hint={view.hint}
           // `/ui` is a prefix of every other page, so it can only match whole.
-          active={view.path === '/ui' ? path === '/ui' : path.startsWith(view.path)}
+          // Pathname only: a page is the same page whichever KB it is showing.
+          // The one extra condition is that bare `/ui` with no KB draws the
+          // picker, so lighting `status` there would point at a page that is
+          // not on screen.
+          active={view.path === '/ui' ? path === '/ui' && Boolean(kb) : path.startsWith(view.path)}
         />
       ))}
 
@@ -84,10 +92,73 @@ export function Rail() {
         external
         icon={VIEWS[0].icon}
         label="plain"
-        hint={`${health} · the no-JavaScript status page`}
+        // It reports on the daemon's launch project and only ever that one, so
+        // it says which. Now that the page beside it can be scoped to a
+        // different KB, a hint reading "the status page" would leave a reader
+        // with two sets of numbers and no way to know they are about two
+        // different projects.
+        hint={`${health} · the no-JavaScript status page for ${status?.project ?? "this daemon's own project"}`}
         status={healthy ? 'ok' : 'missing'}
       />
     </nav>
+  )
+}
+
+/**
+ * Which knowledge base is open, and the way out of it.
+ *
+ * This slot held a decorative dot on a white square. It sits at the top of the
+ * navigation column, which is exactly where "what am I looking at" belongs —
+ * and the failure being corrected here is that this question had no answer
+ * anywhere on screen. So it is the name of the open KB over a control that
+ * goes to the picker.
+ *
+ * With no `kb` in the URL the daemon's launch project is what every page is
+ * showing, and it is labelled as that rather than dressed up as a choice: a
+ * reader who never picked anything should not be shown a name that implies they
+ * did. Below 1024px the rail is 52px and every caption in it is hidden, so the
+ * name goes too and the `title` carries it.
+ */
+function Switcher({ kb }: { kb: string }) {
+  const { status, kbs } = useFeed()
+  const open = kb ? kbs?.kbs.find((row) => row.id === kb) : undefined
+  const launchPath = status?.project ?? ''
+
+  const name = open
+    ? open.name
+    : kb
+      ? kb
+      : launchPath
+        ? launchPath.split('/').filter(Boolean).pop() || launchPath
+        : 'no project'
+
+  const detail = open
+    ? open.path
+    : kb
+      ? 'the registry does not list this id'
+      : launchPath || 'this daemon was started without a project'
+
+  return (
+    <Link
+      to={PICKER}
+      title={`${name} — ${detail} · switch knowledge base`}
+      className="group mb-3 flex w-full flex-col items-center gap-0.5 outline-none"
+    >
+      <span className="sr-only">switch knowledge base — currently {name}</span>
+      <span className="max-w-[64px] truncate text-[9px] leading-none text-foreground max-lg:hidden">
+        {name}
+      </span>
+      {!open && !kb && (
+        // Not a chosen KB. Saying so costs one line and stops the rail from
+        // implying a selection the reader never made.
+        <span className="max-w-[64px] truncate text-[8px] leading-none text-muted-foreground max-lg:hidden">
+          this daemon's project
+        </span>
+      )}
+      <span className="flex size-6 items-center justify-center rounded-md text-muted-foreground group-hover:bg-panel-hover group-hover:text-foreground">
+        <ChevronsUpDown className="size-3.5" />
+      </span>
+    </Link>
   )
 }
 
