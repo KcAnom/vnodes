@@ -77,6 +77,14 @@ toolchain. It still reaches no network — the daemon serves it off disk.
   writes nothing. `/ui/map/data` returns that payload as JSON for anything that
   is not a browser.
 
+  The UI has two checks of its own, both needing a built bundle and a running
+  daemon, which is why neither is part of `npm test`:
+  `npm --prefix ui run shots` renders the pages in headless Chrome and reports
+  the console beside each image, and `npm --prefix ui run check` asserts the
+  promises the pages make — no card clips its own content, nothing sits under
+  the chrome, edges carry direction, omission is stated, the filter dims rather
+  than hides, and no page reaches a host but this one.
+
 ## Quick start
 
 ```bash

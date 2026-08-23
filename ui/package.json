@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
-    "shots": "sh scripts/shots.sh"
+    "shots": "sh scripts/shots.sh",
+    "check": "sh scripts/shots.sh >/dev/null 2>&1; node scripts/check.mjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.3",

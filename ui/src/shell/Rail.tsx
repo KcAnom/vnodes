@@ -47,7 +47,14 @@ export function Rail() {
       : 'index: asking…'
 
   return (
-    <aside className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-border bg-rail py-3 max-lg:w-[52px]">
+    // A <nav>, not an <aside>: this is the page's navigation, and it was the
+    // only route between the five pages while announcing itself as a
+    // complementary region. It also left the document with no navigation
+    // landmark at all, so a screen-reader user had nothing to jump to.
+    <nav
+      aria-label="vnodes sections"
+      className="flex w-[72px] shrink-0 flex-col items-center gap-1 border-r border-border bg-rail py-3 max-lg:w-[52px]"
+    >
       {/* The project mark. A dot on a light square, so it holds in either
           theme without a second asset and without a network request. */}
       <div className="mb-3 flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-white">
@@ -80,7 +87,7 @@ export function Rail() {
         hint={`${health} · the no-JavaScript status page`}
         status={healthy ? 'ok' : 'missing'}
       />
-    </aside>
+    </nav>
   )
 }
 
