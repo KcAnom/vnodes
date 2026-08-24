@@ -65,6 +65,7 @@ const TOOL_HINTS = {
   get_impact_graph: 'who depends on a file/symbol before you change it.',
   get_skeleton: 'signatures-only view instead of reading a whole file.',
   save_observation: 'record a durable insight (link a file for staleness tracking).',
+  forget_observation: 'delete a manual finding by id when it is wrong or no longer true.',
   search_memory: 'recall findings from previous sessions.',
   index_status: 'index health when a result looks stale or wrong.',
 };
