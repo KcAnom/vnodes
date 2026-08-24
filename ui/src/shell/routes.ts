@@ -83,7 +83,7 @@ export const VIEWS: View[] = [
   {
     path: '/ui/capsule',
     label: 'capsule',
-    hint: 'what an agent would actually be handed for a task',
+    hint: 'inspect the run_pipeline payload agents are built to consume',
     icon: Layers,
     element: CapsuleView,
     tool: 'get_context_capsule',
