@@ -11,10 +11,10 @@ const { runIndex, indexStatus } = require('./indexer');
 const { buildCapsule } = require('./capsule');
 const { buildSkeleton } = require('./skeleton');
 const { impactGraph, logicFlow } = require('./graph');
-const { captureObservation, deleteObservation, clearActivity, searchMemory, sessionContext } = require('./memory');
+const { captureObservation, deleteObservation, updateObservation, clearActivity, searchMemory, sessionContext } = require('./memory');
 const { setupWorkspace, loadWorkspace, forgetWorkspace } = require('./workspace');
 const { openStore } = require('./store');
-const { idForPath, hide, show, forget } = require('./registry');
+const { idForPath, hide, show, forget, listKbs } = require('./registry');
 
 const TOOL_DEFS = [
   { name: 'run_pipeline', description: 'One-call task orientation: intent preset → graph traversal → context capsule (pivot files in full, supporting skeletons, relevant memories with rationale), fitted to the token budget. Presets: auto (default), explore, debug (auto-includes tests), modify, refactor.',
@@ -30,15 +30,19 @@ const TOOL_DEFS = [
   { name: 'get_session_context', description: 'Recent observations from this and previous sessions (stale ones flagged, never dropped).',
     inputSchema: { type: 'object', properties: { limit: { type: 'number' } } } },
   { name: 'search_memory', description: 'Search stored observations; each hit carries a rationale for why it matched.',
-    inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] } },
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' }, findings_only: { type: 'boolean', description: 'if true, only kind=manual findings — what capsules attach' } }, required: ['query'] } },
   { name: 'save_observation', description: 'Save a manual observation, optionally linked to a symbol/file for staleness tracking.',
     inputSchema: { type: 'object', properties: { summary: { type: 'string' }, symbol: { type: 'string' }, file: { type: 'string' } }, required: ['summary'] } },
   { name: 'forget_observation', description: 'Delete a manual finding by id (the diary, not pipeline activity).',
     inputSchema: { type: 'object', properties: { id: { type: 'number', description: 'observation id from search_memory or get_session_context' } }, required: ['id'] } },
+  { name: 'update_observation', description: 'Edit a manual finding by id (summary and optional file/symbol).',
+    inputSchema: { type: 'object', properties: { id: { type: 'number' }, summary: { type: 'string' }, file: { type: 'string' }, symbol: { type: 'string' } }, required: ['id'] } },
   { name: 'index_status', description: 'Index health: state, file/node/edge counts, repos, languages, last index time.',
     inputSchema: { type: 'object', properties: {} } },
   { name: 'create_knowledge_base', description: 'Make this directory (or `path`) a vnodes knowledge base and index it. This is how a knowledge base is created — every other tool refuses a directory that is not one yet, and points here. Creates the directory if it does not exist, so an agent in an empty terminal can name a new folder and get a knowledge base about it in one call. Safe to call twice: an existing knowledge base is re-indexed, not duplicated.',
     inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'absolute, or relative to the current project root; defaults to the current project root' } } } },
+  { name: 'list_knowledge_bases', description: 'List knowledge bases in the machine registry (id, path, state). Needed before forget/hide/show.',
+    inputSchema: { type: 'object', properties: { include_hidden: { type: 'boolean' } } } },
   { name: 'forget_knowledge_base', description: 'Remove a knowledge base from the machine registry by id. Does not delete the project or its .vnodes index.',
     inputSchema: { type: 'object', properties: { id: { type: 'string', description: '16-hex registry id' } }, required: ['id'] } },
   { name: 'hide_knowledge_base', description: 'Hide a knowledge base from the picker without forgetting it.',
@@ -133,7 +137,8 @@ function ensureIndexed(projectRoot, cfg) {
  * by one that asked for a knowledge base by name.
  */
 const GATE_EXEMPT_TOOLS = new Set([
-  'create_knowledge_base', 'forget_knowledge_base', 'hide_knowledge_base', 'show_knowledge_base',
+  'create_knowledge_base', 'list_knowledge_bases',
+  'forget_knowledge_base', 'hide_knowledge_base', 'show_knowledge_base',
 ]);
 
 /**
@@ -205,11 +210,24 @@ function createKnowledgeBase(projectRoot, args, session) {
 const READ_ONLY_TOOLS = new Set([
   'run_pipeline', 'get_context_capsule', 'get_impact_graph', 'search_logic_flow',
   'get_skeleton', 'get_session_context', 'search_memory', 'index_status',
+  'list_knowledge_bases',
 ]);
 
 function dispatch(projectRoot, name, args, session) {
   // Before engineDir on purpose — see createKnowledgeBase.
   if (name === 'create_knowledge_base') return createKnowledgeBase(projectRoot, args, session);
+  if (name === 'list_knowledge_bases') {
+    const raw = listKbs({ includeHidden: !!args.include_hidden });
+    return {
+      registry_dir: raw.registry_dir,
+      hidden_count: raw.hidden_count,
+      notes: raw.notes,
+      kbs: (raw.kbs || []).map(k => ({
+        id: k.id, name: k.name, path: k.path, state: k.state, hidden: k.hidden,
+        verdict: k.verdict, files: k.files, edges: k.edges, flags: k.flags,
+      })),
+    };
+  }
   if (name === 'forget_knowledge_base') return forget(args.id);
   if (name === 'hide_knowledge_base') return hide(args.id);
   if (name === 'show_knowledge_base') return show(args.id);
@@ -244,11 +262,16 @@ function dispatch(projectRoot, name, args, session) {
       result = { observations: sessionContext(engDir, { session, limit: args.limit || 20 }) };
       break;
     case 'search_memory':
-      result = { results: searchMemory(engDir, args.query, { session, limit: args.limit || 8 }) };
+      result = { results: searchMemory(engDir, args.query, {
+        session, limit: args.limit || 8, findingsOnly: !!args.findings_only,
+      }) };
       break;
     case 'save_observation':
       captureObservation(engDir, { session, tool: 'save_observation', kind: 'manual', summary: args.summary, symbol: args.symbol, file: args.file });
       result = { saved: true };
+      break;
+    case 'update_observation':
+      result = updateObservation(engDir, args);
       break;
     case 'forget_observation':
       result = deleteObservation(engDir, args.id);

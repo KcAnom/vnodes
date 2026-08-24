@@ -25,11 +25,12 @@ toolchain. It still reaches no network — the daemon serves it off disk.
   (auto/explore/debug/modify/refactor; debug pulls tests), graph-ranked pivot
   files in full + supporter skeletons, fitted to a token budget (default 8000),
   with relevant memories attached with rationale.
-- **MCP server (M3)** — `vnodes mcp`, MCP over stdio. 17 tools: run_pipeline,
+- **MCP server (M3)** — `vnodes mcp`, MCP over stdio. 19 tools: run_pipeline,
   get_context_capsule, get_impact_graph, search_logic_flow, get_skeleton,
-  get_session_context, search_memory, save_observation, forget_observation, index_status,
-  create_knowledge_base, forget_knowledge_base, hide_knowledge_base, show_knowledge_base,
-  workspace_setup, forget_workspace, forget_activity. The daemon's HTTP transport (port 7821) shares the same tool
+  get_session_context, search_memory, save_observation, forget_observation, update_observation, index_status,
+  create_knowledge_base, list_knowledge_bases, forget_knowledge_base, hide_knowledge_base, show_knowledge_base,
+  workspace_setup, forget_workspace, forget_activity. search_memory accepts findings_only.
+  The daemon's HTTP transport (port 7821) shares the same tool
   dispatch but is **not** MCP: `POST /rpc` takes `{tool, arguments, session}`
   and returns a plain JSON result — no JSON-RPC envelope, no `initialize`, no
   `tools/list`. An MCP client that speaks HTTP cannot talk to it; give those

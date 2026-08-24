@@ -107,6 +107,20 @@ test('a finding can be deleted; a task record cannot', () => {
   assert.match(blocked.error, /only findings/);
 });
 
+test('updateObservation rewrites a finding and refuses a task row', () => {
+  const { updateObservation } = require('../src/memory');
+  const engDir = store();
+  const hits = searchMemory(engDir, TASK, { findingsOnly: true, readOnly: true });
+  const id = hits[0].id;
+  const out = updateObservation(engDir, { id, summary: 'shape-gate first, then I/O' });
+  assert.equal(out.ok, true);
+  const again = searchMemory(engDir, 'shape-gate', { findingsOnly: true, readOnly: true });
+  assert.match(again[0].summary, /shape-gate/);
+  const log = sessionContext(engDir, { limit: 10, readOnly: true });
+  const taskRow = log.find(r => r.tool === 'run_pipeline');
+  assert.equal(updateObservation(engDir, { id: taskRow.id, summary: 'nope' }).ok, false);
+});
+
 test('clearActivity deletes auto rows and keeps findings', () => {
   const { clearActivity } = require('../src/memory');
   const engDir = store();

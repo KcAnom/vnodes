@@ -124,13 +124,22 @@ test('the read-only surface may not create a knowledge base', () => {
   assert.ok(!fs.existsSync(path.join(dir, '.vnodes')));
 });
 
+test('list_knowledge_bases works in a directory that is not a knowledge base', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-listkbs-'));
+  const r = callTool(dir, 'list_knowledge_bases', {});
+  assert.ok(Array.isArray(r.kbs), `expected a list, got ${JSON.stringify(r)}`);
+  assert.ok(!r.state, 'must not be a gate refusal');
+});
+
 test('every agent is told the tool exists', () => {
   // The block vnodes setup writes into CLAUDE.md / AGENTS.md / .cursor is
   // generated from this catalog, so a tool added here reaches every wired agent
   // without a per-agent edit. That is the whole reason it is a tool.
   assert.ok(TOOL_DEFS.some(d => d.name === 'create_knowledge_base'));
-  for (const name of ['forget_knowledge_base', 'hide_knowledge_base', 'show_knowledge_base', 'forget_workspace', 'forget_activity']) {
+  for (const name of ['forget_knowledge_base', 'hide_knowledge_base', 'show_knowledge_base', 'forget_workspace', 'forget_activity', 'list_knowledge_bases', 'update_observation']) {
     assert.ok(TOOL_DEFS.some(d => d.name === name), `catalog missing ${name}`);
   }
   assert.match(instructionText('/tmp/example-project'), /create_knowledge_base/);
+  assert.match(instructionText('/tmp/example-project'), /list_knowledge_bases/);
+  assert.match(instructionText('/tmp/example-project'), /update_observation/);
 });

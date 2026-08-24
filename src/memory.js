@@ -22,6 +22,36 @@ function readerDb(engDir, readOnly) {
   return db;
 }
 
+function updateObservation(engDir, { id, summary, file, symbol }) {
+  const db = openMemory(engDir);
+  const row = db.prepare('SELECT * FROM observations WHERE id = ?').get(Number(id));
+  if (!row) { db.close(); return { ok: false, error: 'no such note', id }; }
+  if (row.kind !== 'manual') {
+    db.close();
+    return { ok: false, error: 'only findings can be updated', id: row.id, kind: row.kind };
+  }
+  const nextSummary = summary != null ? String(summary).slice(0, 800) : row.summary;
+  const nextFile = file !== undefined ? (file || null) : row.file;
+  const nextSymbol = symbol !== undefined ? (symbol || null) : row.symbol;
+  let hash = row.hash_at_save;
+  let stale = row.stale;
+  if (file !== undefined) {
+    hash = null;
+    stale = 0;
+    if (nextFile) {
+      try {
+        const idx = openStore(engDir);
+        hash = idx.prepare('SELECT hash FROM files WHERE path = ?').get(nextFile)?.hash || null;
+        idx.close();
+      } catch {}
+    }
+  }
+  db.prepare('UPDATE observations SET summary = ?, file = ?, symbol = ?, hash_at_save = ?, stale = ? WHERE id = ?')
+    .run(nextSummary, nextFile, nextSymbol, hash, stale, row.id);
+  db.close();
+  return { ok: true, id: row.id, summary: nextSummary, file: nextFile, symbol: nextSymbol };
+}
+
 function deleteObservation(engDir, id) {
   const db = openMemory(engDir);
   const row = db.prepare('SELECT id, kind FROM observations WHERE id = ?').get(Number(id));
@@ -164,4 +194,4 @@ function clearActivity(engDir) {
   return { ok: true, deleted: Number(info.changes || 0) };
 }
 
-module.exports = { captureObservation, deleteObservation, clearActivity, searchMemory, sessionContext, refreshStaleness };
+module.exports = { captureObservation, deleteObservation, updateObservation, clearActivity, searchMemory, sessionContext, refreshStaleness };

@@ -71,7 +71,9 @@ const TOOL_HINTS = {
   show_knowledge_base: 'unhide a knowledge base.',
   forget_workspace: 'remove workspace.json and parent pointers; indexes stay.',
   forget_activity: 'delete auto-captured tool-call rows; manual findings stay.',
-  search_memory: 'recall findings from previous sessions.',
+  search_memory: 'recall findings from previous sessions (pass findings_only for the diary).',
+  list_knowledge_bases: 'list registry ids/paths/states before forget or hide.',
+  update_observation: 'edit a manual finding by id.',
   index_status: 'index health when a result looks stale or wrong.',
 };
 
@@ -87,6 +89,13 @@ function toolCatalogLines() {
   return TOOL_DEFS
     .map(t => `- \`${t.name}\` — ${TOOL_HINTS[t.name] || firstSentence(t.description)}`)
     .join('\n');
+}
+
+function refreshRepoInstructions(projectRoot) {
+  const block = instructionText(projectRoot);
+  for (const f of ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']) {
+    upsertMarkerBlock(path.join(projectRoot, f), block);
+  }
 }
 
 function instructionText(projectRoot) {
@@ -202,4 +211,4 @@ function setupAgents(projectRoot, { only = null, personalMode = false } = {}) {
   return { detected: detected.map(a => ({ id: a.id, name: a.name, installed: a.installed })), configured: results, personalMode };
 }
 
-module.exports = { detectAgents, setupAgents, instructionText, inRepo, upsertMcpJson, AGENTS };
+module.exports = { detectAgents, setupAgents, instructionText, refreshRepoInstructions, inRepo, upsertMcpJson, AGENTS };
