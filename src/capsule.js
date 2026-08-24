@@ -140,7 +140,34 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   // that scored well and lost to the last 200 tokens.
   const capsule = { intent, intent_reason: intentReason, budget_tokens: budget, pivots: [], skeletons: [], memories: [], truncated: false, omitted: [] };
 
-  const pivotBudget = Math.floor(budget * 0.7);
+  /**
+   * Memories are chosen before the content spends, and their cost is held back.
+   *
+   * The capsule is assembled for a headless agent, whose one scarcity is
+   * context — the UI is a separate surface and never touches this budget. Spent
+   * in ranking order, that budget goes to the most reproducible thing in the
+   * payload first: source, which the agent can open itself, for free, whenever
+   * it likes. Memories went last and got the remainder. Measured on this repo
+   * at the 8000 default: the pivot took 7381 tokens, one pivot cost 43x one
+   * memory, and all three stored findings were dropped — silently, because the
+   * loop below only broke where the loops above kept a receipt.
+   *
+   * The graph rebuilds from code in 0.05s. Observations do not rebuild at all.
+   * So the unrecoverable half is funded first, and cheaply: the reserve is
+   * never more than the memories actually found, so a task with nothing stored
+   * costs the content nothing at all.
+   */
+  const found = searchMemory(engDir, task, { session, limit: 5 });
+  const memoryCost = found.map(m => estimateTokens(JSON.stringify(m)));
+  const wanted = memoryCost.reduce((a, b) => a + b, 0);
+  const reserve = Math.min(
+    wanted,
+    cfg.capsule.memory_reserve_tokens ?? 1000,
+    Math.floor(budget * ((cfg.capsule.memory_reserve_max_pct ?? 25) / 100)),
+  );
+  const contentBudget = budget - reserve;
+
+  const pivotBudget = Math.floor(contentBudget * 0.7);
   for (const p of pivotFiles) {
     const content = readProjectFile(projectRoot, p.path);
     if (content == null) continue;
@@ -174,7 +201,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     const sk = buildSkeleton(db, s.path, detail);
     if (!sk) continue;
     const tok = estimateTokens(sk);
-    if (used + tok > budget) {
+    if (used + tok > contentBudget) {
       capsule.truncated = true;
       // Everything from here down ranked in and lost to the budget. Name all of
       // it, not just the file that happened to be at the head of the queue when
@@ -192,12 +219,29 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   db.close();
 
   // Auto-surface relevant memories with rationale (BR-014) — budget-counted.
-  for (const m of searchMemory(engDir, task, { session, limit: 5 })) {
-    const tok = estimateTokens(JSON.stringify(m));
-    if (used + tok > budget) break;
-    capsule.memories.push(m);
+  // Against the full budget, not contentBudget: the reserve above is the floor
+  // these are guaranteed, and anything the content left unspent is theirs too.
+  for (let i = 0; i < found.length; i++) {
+    const tok = memoryCost[i];
+    if (used + tok > budget) {
+      capsule.truncated = true;
+      // The receipt the loops above already keep. Without it a reader cannot
+      // tell "nothing relevant was stored" from "it did not fit", and those are
+      // opposite facts: one means there is nothing to know, the other means
+      // there is something known that this capsule did not carry.
+      for (let j = i; j < found.length; j++) {
+        capsule.omitted.push({
+          file: found[j].file || `observation #${found[j].id}`,
+          est_tokens: memoryCost[j],
+          reason: 'budget-memory',
+        });
+      }
+      break;
+    }
+    capsule.memories.push(found[i]);
     used += tok;
   }
+  capsule.memory_reserve_tokens = reserve;
 
   capsule.used_tokens = used;
   // Safety net: with pivot clipping above, the budget should never overflow;

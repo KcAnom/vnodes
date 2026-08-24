@@ -112,3 +112,65 @@ test('intent carries its provenance', () => {
   assert.strictEqual(capsule(root, { task: 'fix the zebra crash' }).intent_reason, 'regex');
   assert.strictEqual(capsule(root, { task: 'zebra', preset: 'explore' }).intent_reason, 'preset');
 });
+
+/**
+ * The memory reserve.
+ *
+ * The capsule is built for a headless agent, and it was spending the agent's
+ * whole budget on the one thing the agent can already get for free. Measured on
+ * this repo at the 8000 default: the pivot took 7381 tokens, one pivot cost 43x
+ * one memory, and all three stored findings were dropped — with no receipt,
+ * because this loop broke where the loops above it kept one. Source rebuilds
+ * from disk; observations rebuild from nothing.
+ */
+const { captureObservation } = require('../src/memory');
+
+function withMemories(n, task) {
+  const body = Array.from({ length: 400 }, (_, i) => `export function zebra${i}() { return ${i}; }`).join('\n');
+  const root = fixture({ 'src/zebra.ts': body });
+  for (let i = 0; i < n; i++) {
+    captureObservation(engineDir(root), {
+      session: 'prior', tool: 'save_observation', kind: 'manual', file: 'src/zebra.ts',
+      summary: `${task} — finding ${i}: ${'a durable detail that cost a session to learn. '.repeat(3)}`,
+    });
+  }
+  return root;
+}
+
+test('a pivot big enough to eat the budget no longer starves the findings', () => {
+  const task = 'zebra';
+  const root = withMemories(3, task);
+  const c = capsule(root, { task });
+  assert.ok(c.memories.length > 0, 'findings were dropped for a file the agent could have opened itself');
+  assert.ok(c.memory_reserve_tokens > 0);
+  assert.ok(c.used_tokens <= c.budget_tokens, 'the reserve broke the budget contract');
+});
+
+test('the reserve costs the content nothing when nothing is stored', () => {
+  const body = Array.from({ length: 400 }, (_, i) => `export function zebra${i}() { return ${i}; }`).join('\n');
+  const root = fixture({ 'src/zebra.ts': body });
+  const c = capsule(root, { task: 'zebra' });
+  assert.equal(c.memory_reserve_tokens, 0);
+  assert.equal(c.memories.length, 0);
+});
+
+test('the reserve is bounded by a share of the budget, not by what memory wants', () => {
+  const task = 'zebra';
+  const root = withMemories(6, task);
+  const c = capsule(root, { task, max_tokens: 400 });
+  assert.ok(c.memory_reserve_tokens <= Math.floor(400 * 0.25), `reserve ${c.memory_reserve_tokens} exceeded its share`);
+  assert.ok(c.used_tokens <= c.budget_tokens);
+});
+
+test('a memory that does not fit is named, not dropped in silence', () => {
+  const task = 'zebra';
+  const root = withMemories(6, task);
+  const c = capsule(root, { task, max_tokens: 400 });
+  const dropped = c.omitted.filter(o => o.reason === 'budget-memory');
+  assert.ok(dropped.length > 0, 'memories were cut with no receipt');
+  for (const d of dropped) {
+    assert.ok(d.est_tokens > 0, 'a receipt that does not say what it cost');
+    assert.equal(typeof d.file, 'string');
+  }
+  assert.equal(c.truncated, true);
+});

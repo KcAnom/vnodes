@@ -1,9 +1,12 @@
 {
   "_comment": "vnodes config defaults. Every value here is a snapshot parameter from the blueprint config-schema (captured 2026-07-31). Configurable \u2014 never hardcoded in source. Override per-project in .vnodes/config.json or via VNODES_* env vars.",
   "capsule": {
+    "_comment": "memory_reserve_tokens is held back from the content budget before pivots spend, because the capsule is assembled for a headless agent and its scarcity is context. Source is the most reproducible thing in the payload — the agent can open the file itself, for free, at any time — while an observation exists nowhere but memory.db and does not rebuild. Measured on this repo 2026-08-23: at an 8000 budget the pivot alone took 7381 tokens, one pivot costing 43x one memory, and all three findings were dropped with no note. The reserve is never larger than the memories actually found, and never more than memory_reserve_max_pct of the budget, so a task with nothing stored costs the content nothing.",
     "max_tokens": 8000,
     "savings_baseline": "65-70%",
-    "skeleton_detail": "standard"
+    "skeleton_detail": "standard",
+    "memory_reserve_tokens": 1000,
+    "memory_reserve_max_pct": 25
   },
   "llm": {
     "min_ram_gb": 6

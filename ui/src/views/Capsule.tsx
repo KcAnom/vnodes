@@ -364,16 +364,21 @@ function Result({
             <>Nothing else was considered and dropped.</>
           ) : (
             <>
-              {omitted.length} file{omitted.length === 1 ? ' was' : 's were'} considered and left
-              out, {omittedTokens.toLocaleString()} tokens' worth:
+              {/* "entries", not "files": the omitted list carries dropped
+                  observations too, and one of those is a finding nobody can
+                  get back by opening a file. */}
+              {omitted.length} {omitted.length === 1 ? 'entry was' : 'entries were'} considered and
+              left out, {omittedTokens.toLocaleString()} tokens' worth:
             </>
           )}
         </p>
         {omitted.length > 0 && (
           <ul className="flex flex-col">
-            {omitted.map((row) => (
+            {/* Keyed on more than the path: two dropped observations can be
+                linked to the same file, and a bare path key collapses them. */}
+            {omitted.map((row, i) => (
               <li
-                key={row.file}
+                key={`${row.reason}:${row.file}:${i}`}
                 className="flex items-baseline gap-3 border-b border-border py-1 last:border-b-0"
               >
                 <Link

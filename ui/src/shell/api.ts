@@ -226,6 +226,14 @@ export type Capsule = {
    * rather than showing nothing and implying nothing was left out.
    */
   omitted?: { file: string; est_tokens: number; reason: string }[]
+  /**
+   * Tokens held back from the content budget for memories before pivots spend.
+   *
+   * Zero when nothing relevant was stored — the reserve is never larger than
+   * the memories actually found, so a task with no history costs the content
+   * nothing. Optional because a daemon older than the reserve does not send it.
+   */
+  memory_reserve_tokens?: number
   /** The daemon's own note on what it withheld from the payload. Printed. */
   stripped?: string
   /** The savings baseline as configured — a range string, shown not computed. */
