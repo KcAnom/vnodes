@@ -237,7 +237,13 @@ const CHECKS = [
       const after = nodes()
       if (after.length !== before) return bad('filtering removed nodes: ' + before + ' -> ' + after.length)
       const lit = after.filter(({ el }) => Number(getComputedStyle(cardOf(el)).opacity) > 0.9)
-      const named = lit.map(n => n.text.split('\\n')[0])
+      // The whole label, not just its first line. The filter matches node.key,
+      // which is the full path, and a node renders that across two lines: the
+      // basename as its title and the directory as its subtitle. Reading only
+      // the first line asserted against the basename, which held right up until
+      // a file lived in a directory named like the search term — src/daemon/
+      // pages.js matches "daemon" by its path and never by its name.
+      const named = lit.map(n => n.text.split('\\n').join(' ').trim())
       if (!lit.length) return bad('every node dimmed, including the ones that match')
       if (lit.length === after.length) return bad('nothing dimmed — the filter did not take')
       const wrong = named.filter(n => !n.toLowerCase().includes('daemon'))
