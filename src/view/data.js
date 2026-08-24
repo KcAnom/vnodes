@@ -6,7 +6,7 @@
 // *drawable* slice — files with their language and symbol counts, plus every
 // edge among them — and changing graph.js to carry presentation fields would
 // leak the viewer into the tool contract.
-const { openStore } = require('./../store');
+const { openStoreReadOnly } = require('./../store');
 const { DOC_LANGS } = require('../parser');
 
 /** A trailing slash is a directory signal, not part of the prefix we match on. */
@@ -86,16 +86,18 @@ function neighborhood(db, roots, depth) {
 function subgraph(engDir, {
   target = '', depth = 2, repo = '', maxNodes = 150, pin = [], prefer = [], path = '', show = 'code',
 } = {}) {
-  const db = openStore(engDir);
+  // GET / map reads never create index.db. openStore would.
+  const db = openStoreReadOnly(engDir);
   const codeOnly = show !== 'all';
+  const empty = (totalFiles, extra = {}) => ({
+    files: [], edges: [], roots: [], total_files: totalFiles, dropped: 0, target,
+    path: '', show: codeOnly ? 'code' : 'all', filtered: { count: 0, langs: {} },
+    out_of_scope: 0, crossing: { in: 0, out: 0 }, unresolved: false, ...extra,
+  });
+  if (!db) return empty(0);
   try {
     const totalFiles = db.prepare('SELECT COUNT(*) c FROM files').get().c;
-    const empty = extra => ({
-      files: [], edges: [], roots: [], total_files: totalFiles, dropped: 0, target,
-      path: '', show: codeOnly ? 'code' : 'all', filtered: { count: 0, langs: {} },
-      out_of_scope: 0, crossing: { in: 0, out: 0 }, unresolved: false, ...extra,
-    });
-    if (totalFiles === 0) return empty({});
+    if (totalFiles === 0) return empty(0);
 
     let scope = normalizeDir(path);
     let roots = [];
@@ -110,7 +112,7 @@ function subgraph(engDir, {
       } else {
         roots = resolveTargets(db, target, repo);
         if (!roots.length) {
-          if (!isIndexedDir(db, asDir)) return empty({ unresolved: true });
+          if (!isIndexedDir(db, asDir)) return empty(totalFiles, { unresolved: true });
           scope = asDir;
         }
       }
@@ -222,7 +224,8 @@ function subgraph(engDir, {
 
 /** Everything the sidebar shows for one file: symbols, both edge directions. */
 function fileDetail(engDir, fileKey) {
-  const db = openStore(engDir);
+  const db = openStoreReadOnly(engDir);
+  if (!db) return null;
   try {
     const file = db.prepare('SELECT path, repo, lang, size FROM files WHERE path = ?').get(fileKey);
     if (!file) return null;
@@ -242,7 +245,8 @@ function fileDetail(engDir, fileKey) {
 
 /** Index generation, for deciding whether a live frame is worth pushing. */
 function indexStamp(engDir) {
-  const db = openStore(engDir);
+  const db = openStoreReadOnly(engDir);
+  if (!db) return 0;
   try {
     return Number(db.prepare("SELECT value FROM meta WHERE key = 'last_index'").get()?.value || 0);
   } catch {

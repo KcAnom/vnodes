@@ -69,24 +69,47 @@ function startWatcher(projectRoot, cfg) {
 }
 
 
+/** Status.workspace: `{ name, repos: [{alias,path}] }` or null. Never a name string. */
+function workspaceStatus(projectRoot) {
+  const ws = loadWorkspace(projectRoot);
+  if (!ws) return null;
+  return {
+    name: ws.name,
+    repos: (ws.repos || []).map(r => ({ alias: r.alias, path: r.path })),
+  };
+}
+
+/**
+ * Vite's dev server sends Origin `http://127.0.0.1:5173` (or localhost:5173)
+ * while the proxy rewrites Host to this daemon. Allow any loopback http Origin
+ * port so the UI can load from :5173; Host must still be this daemon. Writes
+ * still go through rpcDenial, which stays strict.
+ */
+function isLoopbackHttpOrigin(origin) {
+  let u;
+  try { u = new URL(origin); } catch { return false; }
+  if (u.protocol !== 'http:') return false;
+  if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') return false;
+  if (u.username || u.password) return false;
+  if (u.search || u.hash) return false;
+  if (u.pathname && u.pathname !== '/') return false;
+  return true;
+}
+
 /**
  * Why this /ui data request is refused, or null if it is allowed.
  *
- * The same Origin and Host rule /rpc has carried, minus the content-type clause
- * — these are GETs, and demanding a content-type on a GET would refuse the
- * page's own fetches. Verified before this existed: `GET /ui/api/composition`
- * with `Origin: https://evil.example` returned 200, because rpcDenial was wired
- * only into the /rpc POST branch. On a 72-file repo that buys an attacker
- * milliseconds of someone else's CPU and a file listing; with a knowledge-base
- * selector it is one URL away from the 541,275-file home index, where
- * buildCapsule was measured at 18.6 seconds of synchronous work on the daemon's
- * only event loop. `sec-fetch-site` is checked as well as Origin because a
- * cross-site navigation sends no Origin header at all.
+ * The operator UI is /Applications/vnodes.app: mkmacapp WKWebView on
+ * http://127.0.0.1:{boundPort}/ui/bases (hub, preferred_port auto). That
+ * page is same-origin with the daemon. Host must still be this daemon's
+ * bound port. Origin may be any loopback http port so a contributor Vite
+ * tab (not the product) can read /ui/api/*; missing Origin is the WebView
+ * or curl. rpcDenial stays strict: writes are not the app's job.
  */
 function uiDenial(req, port) {
   const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
   const origin = req.headers.origin;
-  if (origin !== undefined && !hosts.some(h => origin === `http://${h}`)) return `origin ${origin}`;
+  if (origin !== undefined && !isLoopbackHttpOrigin(origin)) return `origin ${origin}`;
   if (!hosts.includes(req.headers.host || '')) return `host ${req.headers.host || '(none)'}`;
   if (req.headers['sec-fetch-site'] === 'cross-site') return 'sec-fetch-site cross-site';
   return null;
@@ -144,9 +167,12 @@ function serve(projectRoot) {
       // Deliberately NOT overloaded with an array of projects: doctor() fetches
       // this against a foreign daemon and reads `project` to name the collision.
       // In hub mode that field is null, which is the true answer.
+      // `port` is the bound port (actualPort after listen; the configured port
+      // before). `workspace` matches the UI Status type: {name, repos} or null,
+      // never a bare name string.
       return send(200, hub
-        ? { daemon: 'running', pid: process.pid, port, project: null, index: { state: 'hub' }, workspace: null }
-        : { daemon: 'running', pid: process.pid, port, project: projectRoot, index: indexStatus(projectRoot), workspace: loadWorkspace(projectRoot)?.name || null });
+        ? { daemon: 'running', pid: process.pid, port: boundPort(), project: null, index: { state: 'hub' }, workspace: null }
+        : { daemon: 'running', pid: process.pid, port: boundPort(), project: projectRoot, index: indexStatus(projectRoot), workspace: workspaceStatus(projectRoot) });
     }
     if (req.method === 'GET' && req.url === '/tools') return send(200, { tools: TOOL_DEFS });
     // Parsing moved up here from inside the /ui branch, which means it now runs
@@ -227,6 +253,14 @@ function serve(projectRoot) {
           return send(200, mapView(root, engDir, kcfg, q));
         }
         if (url.pathname === '/ui/map/events') {
+          // Same oversize gate as /ui/map/data. An unscoped SSE stream would
+          // re-run mapView on every index stamp and hold the event loop; a 413
+          // JSON answer is the honest refusal, not a hello frame that then
+          // never delivers a drawable graph.
+          if (!q.target && !q.path) {
+            const refusal = oversizeRefusal(root, r.entry, kcfg, 'an unscoped map of the whole index');
+            if (refusal) return send(413, { kb: r.id, ...refusal });
+          }
           return mapEvents(req, res, root, kcfg, q, {
             kb: r.id,
             // True only when this daemon is the one whose watcher re-indexes
@@ -282,10 +316,26 @@ function serve(projectRoot) {
         dlog(`rpc refused: ${denial}`);
         return send(403, { ok: false, error: `refused: ${denial}` });
       }
-      let body = '';
-      req.on('data', c => { body += c; });
+      const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
+        ? Number(cfg.mcp.max_body_bytes) : 1048576;
+      const chunks = [];
+      let size = 0;
+      let tooBig = false;
+      req.on('data', c => {
+        if (tooBig) return;
+        size += c.length;
+        if (size > maxBody) {
+          tooBig = true;
+          send(413, { ok: false, error: 'payload too large', limit: maxBody });
+          req.destroy();
+          return;
+        }
+        chunks.push(c);
+      });
       req.on('end', () => {
+        if (tooBig) return;
         try {
+          const body = Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8');
           const { tool, arguments: args, session } = JSON.parse(body || '{}');
           const result = callTool(projectRoot, tool, args || {}, session || 'http');
           // Same vintage problem as the stdio server: this process has been
@@ -334,6 +384,16 @@ function serve(projectRoot) {
   server.listen(port, '127.0.0.1', () => {
     actualPort = server.address().port;
     takeIndexing();
+    // Hub pidfile lives next to the registry, not inside a project .vnodes —
+    // a hub has no project, and path.join(null, …) is how this used to crash.
+    // It does not claim indexing: there is nothing to index.
+    if (hub) {
+      try {
+        const pf = pidFile(null);
+        fs.mkdirSync(path.dirname(pf), { recursive: true });
+        fs.writeFileSync(pf, JSON.stringify({ pid: process.pid, port: actualPort }));
+      } catch {}
+    }
     // W2. The launch project is listed the first time its daemon runs, which is
     // also the whole migration path: a project indexed before the registry
     // existed self-registers here, so there is no scan job and no backfill.
@@ -368,10 +428,11 @@ function serve(projectRoot) {
     stopWatcher?.();
     stopWatcher = null;
     clearInterval(claimTimer);
-    // Only the owner wrote the pidfile, so only the owner may remove it —
-    // a follower unlinking it would leave `vnodes daemon stop` with nothing
-    // to stop and the real indexer still running.
-    if (owner) { try { fs.unlinkSync(pidFile(projectRoot)); } catch {} }
+    // Only the owner wrote the project pidfile, so only the owner may remove
+    // it — a follower unlinking it would leave `vnodes daemon stop` with
+    // nothing to stop and the real indexer still running. A hub wrote
+    // registryDir()/hub.pid instead (and never claimed indexing).
+    if (hub || owner) { try { fs.unlinkSync(pidFile(projectRoot)); } catch {} }
     try { server.close(); } catch {}
   };
   const shutdown = () => {
@@ -449,7 +510,7 @@ function mapEvents(req, res, projectRoot, cfg, query, hello = {}) {
   req.on('close', () => clearInterval(timer));
 }
 module.exports = {
-  serve, startDetached, stopDaemon, daemonState, claimIndexing, doctor, httpCall,
+  serve, startDetached, stopDaemon, daemonState, claimIndexing, pidFile, doctor, httpCall,
   // Exported for the tests that pin the two guarantees this file now carries:
   // that /rpc refuses a cross-origin write, and that the UI's data routes are
   // computed without a tool call.

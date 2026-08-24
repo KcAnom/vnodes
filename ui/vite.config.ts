@@ -40,8 +40,16 @@ export default defineConfig({
     },
   },
   server: {
-    // `npm run dev` renders against a live daemon rather than a fixture, so
-    // what is being looked at is the real graph of the real project.
-    proxy: { '/ui': 'http://127.0.0.1:7821' },
+    // Contributor-only. Operators use /Applications/vnodes.app (WKWebView on
+    // the hub daemon, /ui/bases, ephemeral port). `npm run dev` is how a
+    // map/CSS change is looked at against a live daemon before `ui:build`.
+    // `/status` and `/tools` are same-origin fetches from the shell. Proxying
+    // only `/ui` left those as Vite 404s. `/rpc` is not proxied: the UI never
+    // posts there (app or browser).
+    proxy: {
+      '/ui': 'http://127.0.0.1:7821',
+      '/status': 'http://127.0.0.1:7821',
+      '/tools': 'http://127.0.0.1:7821',
+    },
   },
 })

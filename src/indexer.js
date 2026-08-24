@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const { buildIgnore } = require('./ignore');
 const { isSecretFile } = require('./secrets');
 const { parseFile, langOf } = require('./parser');
-const { openStore } = require('./store');
+const { openStore, openStoreReadOnly } = require('./store');
 const { engineDir } = require('./config');
 const { loadWorkspace } = require('./workspace');
 
@@ -625,7 +625,8 @@ function resolveCrossRepoEdges(db, ws, log) {
 function indexStatus(projectRoot) {
   const engDir = path.join(projectRoot, '.vnodes');
   if (!fs.existsSync(path.join(engDir, 'index.db'))) return { state: 'uninitialized' };
-  const db = openStore(engDir);
+  const db = openStoreReadOnly(engDir);
+  if (!db) return { state: 'uninitialized' };
   const out = {
     state: 'ready',
     files: db.prepare('SELECT COUNT(*) c FROM files').get().c,

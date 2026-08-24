@@ -261,7 +261,13 @@ test('hiding is not omission, and forgetting never deletes an index', () => {
   const hidden = listKbs();
   assert.ok(!hidden.kbs.some(k => k.id === p.id), 'a hidden knowledge base leaves the list');
   assert.ok(hidden.hidden_count >= 1, 'and is counted, so hiding is never a silent omission');
+  assert.ok(hidden.hidden_ids.includes(p.id), 'hidden_ids names the omitted id so a scoped URL can still mount');
+  assert.ok(hidden.hidden_ids.every(id => /^[0-9a-f]{16}$/.test(id)), 'hidden_ids are ids, never paths');
+  assert.ok(!hidden.kbs.some(k => hidden.hidden_ids.includes(k.id)));
   assert.ok(hidden.notes.some(n => n.includes('hidden')));
+  const listedHidden = listKbs({ includeHidden: true });
+  assert.ok(listedHidden.kbs.some(k => k.id === p.id && k.hidden));
+  assert.ok(!listedHidden.hidden_ids.includes(p.id), 'an included row is not also an omitted id');
 
   registry.show(p.id);
   assert.ok(listKbs().kbs.some(k => k.id === p.id));
@@ -411,7 +417,123 @@ test('a hub daemon owns no project and refuses to guess one', async () => {
     const kbs = await fetch(`${base}/ui/api/kbs`).then(x => x.json());
     assert.strictEqual(kbs.hub, true);
     assert.strictEqual(kbs.launch_kb, null);
+    assert.ok(Array.isArray(kbs.hidden_ids));
     assert.strictEqual((await fetch(`${base}/ui/bases`)).status, 200);
+
+    assert.strictEqual(status.port, port);
+    assert.strictEqual(status.workspace, null);
+    const pf = path.join(registryDir(), 'hub.pid');
+    assert.ok(fs.existsSync(pf), 'a hub writes registryDir()/hub.pid');
+    const rec = JSON.parse(fs.readFileSync(pf, 'utf8'));
+    assert.strictEqual(rec.pid, process.pid);
+    assert.strictEqual(rec.port, port);
+    const { daemonState } = require('../src/daemon');
+    assert.deepStrictEqual(daemonState(null), { running: true, pid: process.pid, port });
+  } finally {
+    handle.close();
+    delete process.env.VNODES_PORT;
+  }
+  assert.ok(!fs.existsSync(path.join(registryDir(), 'hub.pid')), 'stopping the hub unlinks hub.pid');
+});
+
+test('GET /status reports the bound port and a workspace object or null', async () => {
+  const launch = fixtureProject('status-ws');
+  fs.writeFileSync(path.join(launch.root, '.vnodes', 'workspace.json'), JSON.stringify({
+    name: 'demo',
+    repos: [{ alias: 'root', path: '.' }],
+  }));
+  fs.writeFileSync(path.join(launch.root, '.vnodes', 'config.json'), JSON.stringify({ index: { watch: false } }));
+  const port = await freePort();
+  process.env.VNODES_PORT = String(port);
+  const { serve } = require('../src/daemon');
+  const handle = serve(launch.root);
+  try {
+    const status = await fetch(`http://127.0.0.1:${port}/status`).then(r => r.json());
+    assert.strictEqual(status.port, port);
+    assert.strictEqual(status.port, handle.port());
+    assert.deepStrictEqual(status.workspace, { name: 'demo', repos: [{ alias: 'root', path: '.' }] });
+    assert.ok(!('baseDir' in (status.workspace || {})), 'status does not leak workspace internals');
+  } finally {
+    handle.close();
+    delete process.env.VNODES_PORT;
+  }
+});
+
+test('unscoped map events refuse oversize with 413 JSON, not SSE', async () => {
+  const launch = fixtureProject('events-oversize', { files: 12, edges: 2 });
+  fs.writeFileSync(path.join(launch.root, '.vnodes', 'config.json'), JSON.stringify({
+    index: { watch: false },
+    registry: { oversize_files: 0 },
+  }));
+  const port = await freePort();
+  process.env.VNODES_PORT = String(port);
+  const { serve } = require('../src/daemon');
+  const handle = serve(launch.root);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const r = await fetch(`${base}/ui/map/events?kb=${launch.id}`);
+    assert.strictEqual(r.status, 413);
+    assert.match(r.headers.get('content-type') || '', /application\/json/);
+    const body = await r.json();
+    assert.match(body.error, /too large/);
+    assert.ok(!String(r.headers.get('content-type') || '').includes('event-stream'));
+
+    const scoped = await fetch(`${base}/ui/map/events?kb=${launch.id}&target=src/missing.ts`);
+    assert.strictEqual(scoped.status, 200);
+    assert.match(scoped.headers.get('content-type') || '', /text\/event-stream/);
+    scoped.body.cancel?.();
+  } finally {
+    handle.close();
+    delete process.env.VNODES_PORT;
+  }
+});
+
+test('/rpc caps the body and still refuses a foreign origin', async () => {
+  const launch = fixtureProject('rpc-body');
+  fs.writeFileSync(path.join(launch.root, '.vnodes', 'config.json'), JSON.stringify({
+    index: { watch: false },
+    mcp: { max_body_bytes: 64 },
+  }));
+  const port = await freePort();
+  process.env.VNODES_PORT = String(port);
+  const { serve } = require('../src/daemon');
+  const handle = serve(launch.root);
+  const base = `http://127.0.0.1:${port}`;
+  try {
+    const over = await fetch(`${base}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tool: 'index_status', arguments: { pad: 'x'.repeat(200) } }),
+    });
+    assert.strictEqual(over.status, 413);
+    const overBody = await over.json();
+    assert.strictEqual(overBody.ok, false);
+    assert.match(overBody.error, /payload too large/);
+    assert.strictEqual(overBody.limit, 64);
+
+    const evil = await fetch(`${base}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ tool: 'index_status', arguments: {} }),
+    });
+    assert.strictEqual(evil.status, 403);
+
+    const viteWrite = await fetch(`${base}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'http://127.0.0.1:5173' },
+      body: JSON.stringify({ tool: 'index_status', arguments: {} }),
+    });
+    assert.strictEqual(viteWrite.status, 403, 'rpcDenial stays strict for Vite Origin');
+
+    const plain = await fetch(`${base}/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: '{"tool":"index_status"}',
+    });
+    assert.strictEqual(plain.status, 403, 'CORS-simple text/plain is still refused');
+
+    const viteRead = await fetch(`${base}/ui/api/kbs`, { headers: { origin: 'http://127.0.0.1:5173' } });
+    assert.strictEqual(viteRead.status, 200);
   } finally {
     handle.close();
     delete process.env.VNODES_PORT;

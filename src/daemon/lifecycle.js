@@ -22,8 +22,12 @@ const { spawn } = require('node:child_process');
 const { loadConfig } = require('../config');
 const { indexStatus } = require('../indexer');
 const { loadWorkspace } = require('../workspace');
+const { registryDir } = require('../registry');
 
-function pidFile(projectRoot) { return path.join(projectRoot, '.vnodes', 'daemon.pid'); }
+function pidFile(projectRoot) {
+  if (projectRoot == null) return path.join(registryDir(), 'hub.pid');
+  return path.join(projectRoot, '.vnodes', 'daemon.pid');
+}
 
 function daemonState(projectRoot) {
   const pf = pidFile(projectRoot);
@@ -48,6 +52,7 @@ function daemonState(projectRoot) {
  * Only writing is exclusive.
  */
 function claimIndexing(projectRoot, port) {
+  if (projectRoot == null) return false; // a hub indexes nothing
   const state = daemonState(projectRoot);
   if (state.running && state.pid !== process.pid) return false;
   fs.writeFileSync(pidFile(projectRoot), JSON.stringify({ pid: process.pid, port }));

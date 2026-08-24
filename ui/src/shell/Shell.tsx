@@ -37,7 +37,33 @@ import { Link, useRoute } from './route'
 import { PICKER, PLAIN_STATUS, VIEWS } from './routes'
 import { StatusFeed, useFeed } from './status'
 import { fetchTools } from './api'
+import type { KbList } from './api'
 import { useKb } from './kb'
+
+/** Registry keys are sixteen lowercase hex chars. Anything else is not an id. */
+const KB_ID = /^[0-9a-f]{16}$/
+
+/**
+ * Whether this `kb` is a real registry key the listing just did not draw.
+ *
+ * `kbs.kbs` omits hidden rows and is sliced to `list_cap`. `resolveKb` still
+ * works for those ids, so refusing them here would draw "unknown" for a
+ * project the server would have served. Prefer `hidden_ids` when the daemon
+ * sent it; fall back to the listing's own "we withheld some" signals for a
+ * daemon that has not.
+ */
+function kbIsResolvable(kbs: KbList, kb: string): boolean {
+  if (kbs.kbs.some((row) => row.id === kb)) return true
+  if (!KB_ID.test(kb)) return false
+  if (kbs.hidden_ids?.includes(kb)) return true
+  // Prefer hidden_ids when present. An older daemon that only sent a count
+  // still needs a valid id to mount — resolveKb will 404 a fake one.
+  if (!kbs.hidden_ids && (kbs.hidden_count ?? 0) > 0) return true
+  if (kbs.scan_capped) return true
+  if (kbs.discovery?.truncated) return true
+  if ((kbs.notes ?? []).some((note) => /list_cap|not listed|scan_cap/.test(note))) return true
+  return false
+}
 
 export function Shell() {
   return (
@@ -92,13 +118,13 @@ function Main() {
               <div className="map-surface h-full w-full">
                 <MapBoundary>
                   <Suspense fallback={<Centered>drawing…</Centered>}>
-                    <view.element />
+                    <view.element key={kb || 'launch'} />
                   </Suspense>
                 </MapBoundary>
               </div>
             ) : (
               <Document>
-                <view.element />
+                <view.element key={kb || 'launch'} />
               </Document>
             )}
           </KbGuard>
@@ -118,7 +144,9 @@ function Main() {
  * view does not mount, does not fetch, and does not draw a graph. That is the
  * whole point: the failure this closes is a link from another machine, whose
  * ids are different, rendering as somebody else's project under a URL that
- * looks like it worked.
+ * looks like it worked. Hidden ids and rows cut by the list cap are not
+ * "unlisted" in that sense: the listing withheld them on purpose, and the
+ * server will still resolve them.
  *
  * A daemon in hub mode with no `kb` in the URL has no project to be scoped to
  * at all, so the page says so and points at the picker rather than showing five
@@ -139,7 +167,7 @@ function KbGuard({ scoped, kb, children }: { scoped: boolean; kb: string; childr
     // later would open an EventSource against a KB that may not exist and
     // flash a graph the reader is about to be told is the wrong one.
     if (!kbs) return <Centered>checking which knowledge base that is…</Centered>
-    if (!kbs.kbs.some((row) => row.id === kb)) return <UnknownKb id={kb} />
+    if (!kbIsResolvable(kbs, kb)) return <UnknownKb id={kb} />
     return <>{children}</>
   }
 

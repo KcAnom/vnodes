@@ -56,6 +56,19 @@ test('empty index yields a drawable empty slice, not a throw', () => {
   assert.strictEqual(slice.unresolved, false);
 });
 
+test('a missing index is empty and does not create index.db', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-view-noidx-'));
+  const engDir = path.join(root, '.vnodes');
+  fs.mkdirSync(engDir, { recursive: true });
+  const slice = subgraph(engDir, { target: 'src/nope.ts' });
+  assert.deepStrictEqual(slice.files, []);
+  assert.strictEqual(slice.total_files, 0);
+  assert.strictEqual(fileDetail(engDir, 'src/nope.ts'), null);
+  assert.strictEqual(indexStamp(engDir), 0);
+  assert.strictEqual(fs.existsSync(path.join(engDir, 'index.db')), false,
+    'GET-style map reads must not create index.db');
+});
+
 test('slice carries the fields a renderer draws from', () => {
   const root = chainFixture();
   const slice = subgraph(eng(root), {});
@@ -620,6 +633,28 @@ test('/rpc refuses the cross-origin write hole and nothing else', () => {
   assert.match(rpcDenial(req({ ...json, origin: 'https://evil.example' }), 7821), /origin/);
   assert.match(rpcDenial(req({ ...json, host: 'evil.example' }), 7821), /host/);
   assert.match(rpcDenial(req({ host: '127.0.0.1:7821' }), 7821), /content-type/);
+  // Vite's :5173 Origin is allowed on /ui reads, never on /rpc writes.
+  assert.match(rpcDenial(req({ ...json, origin: 'http://127.0.0.1:5173' }), 7821), /origin/);
+  assert.match(rpcDenial(req({ ...json, origin: 'http://localhost:5173' }), 7821), /origin/);
+});
+
+test('/ui data allows loopback Origin on any port; Host is still this daemon', () => {
+  const { uiDenial } = require('../src/daemon');
+  const req = (headers) => ({ headers });
+  const host = { host: '127.0.0.1:7821' };
+
+  assert.strictEqual(uiDenial(req(host), 7821), null, 'no Origin is the same-origin page');
+  assert.strictEqual(uiDenial(req({ ...host, origin: 'http://127.0.0.1:7821' }), 7821), null);
+  assert.strictEqual(uiDenial(req({ ...host, origin: 'http://127.0.0.1:5173' }), 7821), null,
+    'Vite dev Origin is :5173 while Host is rewritten to the daemon');
+  assert.strictEqual(uiDenial(req({ ...host, origin: 'http://localhost:5173' }), 7821), null);
+  assert.strictEqual(uiDenial(req({ host: 'localhost:7821', origin: 'http://127.0.0.1:5173' }), 7821), null);
+
+  assert.match(uiDenial(req({ ...host, origin: 'https://evil.example' }), 7821), /origin/);
+  assert.match(uiDenial(req({ ...host, origin: 'https://127.0.0.1:5173' }), 7821), /origin/,
+    'https loopback is not the Vite proxy');
+  assert.match(uiDenial(req({ host: 'evil.example', origin: 'http://127.0.0.1:5173' }), 7821), /host/);
+  assert.match(uiDenial(req({ ...host, 'sec-fetch-site': 'cross-site' }), 7821), /sec-fetch-site/);
 });
 
 test('the capsule the UI is handed carries costs, not file bodies', () => {
@@ -730,6 +765,16 @@ test('a dead owner is taken over, not deferred to forever', () => {
   fs.writeFileSync(pidPath, JSON.stringify({ pid: 999999, port: 7821 }));
   assert.strictEqual(claimIndexing(root, 41003), true, 'a stale pidfile must not block indexing forever');
   assert.strictEqual(JSON.parse(fs.readFileSync(pidPath, 'utf8')).port, 41003);
+});
+
+test('pidFile(null) is the hub pidfile, never path.join(null)', () => {
+  const { pidFile, daemonState, claimIndexing, stopDaemon } = require('../src/daemon');
+  const { registryDir } = require('../src/registry');
+  assert.strictEqual(pidFile(null), path.join(registryDir(), 'hub.pid'));
+  assert.ok(!pidFile(null).includes('null'));
+  assert.strictEqual(claimIndexing(null, 7821), false, 'a hub does not claim indexing');
+  assert.deepStrictEqual(daemonState(null), { running: false });
+  assert.strictEqual(stopDaemon(null).stopped, false);
 });
 
 // The plain status page is reached from the rail's "plain" link, and the rail

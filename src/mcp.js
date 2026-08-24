@@ -7,6 +7,21 @@ const { findProjectRoot } = require('./config');
 const { log } = require('./logs');
 const { stalenessNotice } = require('./staleness');
 
+/**
+ * Whether an MCP tools/call result should be flagged isError.
+ *
+ * Gate refusals (`state: refused | not_a_knowledge_base`) used to arrive as a
+ * successful MCP result whose JSON said no. `{error}` with no other payload is
+ * the same shape. Keep the JSON in content[0].text either way.
+ */
+function toolCallIsError(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  if (result.state === 'refused' || result.state === 'not_a_knowledge_base') return true;
+  if (result.error == null) return false;
+  const keys = Object.keys(result).filter(k => k !== 'vnodes_stale');
+  return keys.length === 1 && keys[0] === 'error';
+}
+
 function startMcpStdio(projectRootArg) {
   const projectRoot = findProjectRoot(projectRootArg);
   const session = `mcp-${process.pid}`;
@@ -61,7 +76,12 @@ function startMcpStdio(projectRootArg) {
         const payload = (stale && result && typeof result === 'object' && !Array.isArray(result))
           ? { ...result, vnodes_stale: stale }
           : result;
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] } });
+        const mcpResult = { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] };
+        // Gate refusals are still JSON in content[0].text (newline JSON-RPC,
+        // not LSP Content-Length). isError tells MCP clients not to treat them
+        // as a successful tool payload.
+        if (toolCallIsError(payload)) mcpResult.isError = true;
+        send({ jsonrpc: '2.0', id, result: mcpResult });
       } else if (method === 'ping') {
         send({ jsonrpc: '2.0', id, result: {} });
       } else if (id !== undefined) {
@@ -75,4 +95,4 @@ function startMcpStdio(projectRootArg) {
   }
 }
 
-module.exports = { startMcpStdio };
+module.exports = { startMcpStdio, toolCallIsError };

@@ -15,7 +15,8 @@
   },
   "mcp": {
     "port": 7821,
-    "transport": "stdio"
+    "transport": "stdio",
+    "max_body_bytes": 1048576
   },
   "index": {
     "max_file_size_kb": 512,

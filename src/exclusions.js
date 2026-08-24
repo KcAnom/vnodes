@@ -30,7 +30,10 @@ function walk(root, isIgnored, report, budget) {
   try { entries = fs.readdirSync(root.abs, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
     if (budget.spent++ > MAX_ENTRIES) { report.truncated = true; return; }
-    const rel = root.prefix ? `${root.prefix}/${entry.name}` : entry.name;
+    // Ignore rules are repo-relative, matching indexer.walk. The alias prefix
+    // is only for the reported path, matching indexer file keys (`alias/rel`).
+    const rel = root.rel ? `${root.rel}/${entry.name}` : entry.name;
+    const reported = root.prefix ? `${root.prefix}/${rel}` : rel;
     const abs = path.join(root.abs, entry.name);
     const isDir = entry.isDirectory();
 
@@ -38,11 +41,11 @@ function walk(root, isIgnored, report, budget) {
       const why = isIgnored.reason(rel, isDir) || { source: 'unknown', pattern: '' };
       // A file with no recognised language was never a candidate, so reporting
       // it as excluded would bury the real answers in noise.
-      if (isDir) report.subtrees.push({ path: rel + '/', ...why });
-      else if (langOf(rel)) report.files.push({ path: rel, lang: langOf(rel), ...why });
+      if (isDir) report.subtrees.push({ path: reported + '/', ...why });
+      else if (langOf(rel)) report.files.push({ path: reported, lang: langOf(rel), ...why });
       continue;
     }
-    if (isDir) walk({ abs, prefix: rel }, isIgnored, report, budget);
+    if (isDir) walk({ abs, prefix: root.prefix, rel }, isIgnored, report, budget);
   }
 }
 
@@ -52,12 +55,21 @@ function walk(root, isIgnored, report, budget) {
 function excludedSummary(projectRoot) {
   const workspace = loadWorkspace(projectRoot);
   const roots = workspace?.repos?.length
-    ? workspace.repos.map(r => ({ abs: r.path, prefix: '' }))
-    : [{ abs: projectRoot, prefix: '' }];
+    ? workspace.repos.map(r => ({
+        // Same resolve as indexer.runIndex: relative secondary paths are
+        // against workspace.baseDir, never against process.cwd().
+        abs: path.resolve(workspace.baseDir, r.path),
+        prefix: r.alias || '',
+        rel: '',
+      }))
+    : [{ abs: projectRoot, prefix: '', rel: '' }];
 
   const report = { subtrees: [], files: [], by_source: {}, truncated: false };
   const budget = { spent: 0 };
-  for (const root of roots) walk(root, buildIgnore(root.abs), report, budget);
+  for (const root of roots) {
+    if (!fs.existsSync(root.abs)) continue;
+    walk(root, buildIgnore(root.abs), report, budget);
+  }
 
   for (const item of [...report.subtrees, ...report.files]) {
     report.by_source[item.source] = (report.by_source[item.source] || 0) + 1;

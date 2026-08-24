@@ -39,6 +39,7 @@ const CLIP_PREVIEW = 2000
 
 export function CapsuleView() {
   const { params } = useRoute()
+  const kb = useKb()
   const task = params.get('task') ?? ''
   const preset = params.get('preset') ?? ''
   const maxTokens = params.get('max_tokens') ?? ''
@@ -63,7 +64,7 @@ export function CapsuleView() {
     return () => {
       live = false
     }
-  }, [task, preset, maxTokens])
+  }, [task, preset, maxTokens, kb])
 
   return (
     <div className="flex flex-col gap-6">

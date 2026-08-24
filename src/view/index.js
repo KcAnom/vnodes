@@ -35,7 +35,7 @@ function mapView(projectRoot, engDir, cfg, query = {}) {
   let intent = '';
   if (task) {
     const { buildCapsule } = require('../capsule');
-    const capsule = buildCapsule(projectRoot, engDir, cfg, { task, session: 'ui-map' });
+    const capsule = buildCapsule(projectRoot, engDir, cfg, { task, session: 'ui-map', readOnly: true });
     intent = capsule.intent;
     focus = new Set(capsule.pivots.map(p => p.file));
     supporters = new Set(capsule.skeletons.map(s => s.file));

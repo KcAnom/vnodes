@@ -4,6 +4,7 @@
 process.removeAllListeners('warning');
 process.on('warning', () => {}); // node:sqlite emits ExperimentalWarning on Node 22
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { loadConfig, findProjectRoot, engineDir } = require('../src/config');
 const { log, logPath } = require('../src/logs');
@@ -22,9 +23,74 @@ const cmd = args.shift() || 'help';
 const projectRoot = findProjectRoot(flags.project || process.cwd());
 const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null, 2));
 
+function realpathOrResolve(p) {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+function isHomeProject(root) {
+  return realpathOrResolve(root) === realpathOrResolve(os.homedir());
+}
+
+// CLI index/reindex is the human opt-in (tools never take this path). $HOME still
+// needs --force: indexing it produced 541,275 files and never finished.
+function refuseHomeIndex() {
+  if (!isHomeProject(projectRoot) || flags.force) return false;
+  out(`refused: ${projectRoot} is your home directory. Indexing it needs an explicit opt-in: vnodes index --force --project ~`);
+  process.exitCode = 1;
+  return true;
+}
+
+function printHelp() {
+  out(`vnodes — local-first code-graph context engine for AI agents
+
+usage: vnodes <command> [args] [--flags]
+
+  index                       build/update the graph (incremental via committed manifest).
+                              $HOME is refused unless --force is passed
+  reindex                     force full re-index (stops daemon, rebuilds store, restarts daemon)
+  status                      index + daemon state
+  pipeline <task...>          one-call context capsule (--preset auto|explore|debug|modify|refactor, --max-tokens N, --repos a,b, --json)
+  capsule <task...>           alias of pipeline
+  skeleton <file>             signatures-only view (--detail minimal|standard|detailed)
+  impact <file-or-symbol>     who depends on this (--depth N)
+  flow <from> <to>            dependency path between two files/symbols
+  memory [recent|search <q>|save <text> [--file f] [--symbol s]]
+  workspace [setup --name N --repos alias=path,...]
+  kb [list|discover [path...]|register [path]|forget <id>|hide <id>|show <id>]
+                              the knowledge-base registry: every project this machine has indexed.
+                              a project is registered by INDEXING it; discover finds ones already on
+                              disk and registers them without indexing anything; forget removes the row and
+                              prints (never runs) the rm -rf that would remove the index itself
+  setup [--detect] [--only claude-code,cursor] [--personal]
+  daemon [start|stop|status] [--hub]
+                              HTTP transport on cfg.mcp.port (stdio is default).
+                              --hub serves the registry with no project of its own: it indexes
+                              nothing, watches nothing, and opens on the picker.
+                              stop --hub / status --hub use the hub pidfile
+  call <tool> --args '{...}'  HTTP tool call (auto-starts daemon).
+                              refuses if the bound daemon is a hub or another project unless --force
+  mcp [project-root]          stdio MCP server (what agents launch)
+  doctor                      read-only diagnostics, works with daemon down
+  logs [daemon|index] [--follow]
+  llm [status|install|enable|disable|runtime|ask <q>] [--runtime claude-code|pi] [--pi-model grok-4.5-latest|gpt-5.6-sol]
+  ui [page] [args]            open the operator UI for THIS project (the URL carries ?kb=<id>).
+                              bare http://127.0.0.1:<port>/ui with no ?kb= is the knowledge-base
+                              picker — every indexed project on this machine — and so is /ui/bases.
+                              pages: overview (default), map, capsule "<task>" [--preset p],
+                              notes [--q text], index, bases (picker, no ?kb=),
+                              status (plain HTML, no bundle needed,
+                              reports on the daemon's own project only)
+  map [target|dir] [--path DIR] [--all] [--depth N] [--task "..."]
+                              open the live dependency map (scoped to target if given)
+                              draws code by default; --all includes markdown, json and config
+
+project: resolved upward from cwd (--project <path> to override)`);
+}
+
 (async () => {
   switch (cmd) {
     case 'index': {
+      if (refuseHomeIndex()) break;
       const { runIndex } = require('../src/indexer');
       const cfg = loadConfig(projectRoot);
       const r = runIndex(projectRoot, cfg, m => log(projectRoot, 'index', m));
@@ -32,6 +98,7 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       break;
     }
     case 'reindex': { // force re-index: full restart + rebuild (ERR-002)
+      if (refuseHomeIndex()) break;
       const { stopDaemon, startDetached } = require('../src/daemon');
       const eng = engineDir(projectRoot);
       stopDaemon(projectRoot);
@@ -40,7 +107,8 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       }
       const { runIndex } = require('../src/indexer');
       const r = runIndex(projectRoot, loadConfig(projectRoot), m => log(projectRoot, 'index', m));
-      out(`force re-index: ${r.files} files, ${r.nodes} nodes, ${r.edges} edges in ${r.ms}ms (daemon restarts on next tool call)`);
+      const pid = startDetached(projectRoot);
+      out(`force re-index: ${r.files} files, ${r.nodes} nodes, ${r.edges} edges in ${r.ms}ms (daemon restarting pid=${pid})`);
       break;
     }
     case 'status': {
@@ -55,9 +123,10 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
     case 'daemon': {
       const sub = args.shift() || 'status';
       const d = require('../src/daemon');
-      // --hub: serve the registry and no project at all. This is what the macOS
-      // app runs. A hub indexes nothing, watches nothing and claims no pidfile,
-      // so it has no project it could be showing you by mistake.
+      // --hub: serve the registry and no project at all. This is what
+      // /Applications/vnodes.app runs (WKWebView, preferred_port auto, /ui/bases).
+      // A hub indexes nothing and watches nothing. It writes registryDir()/hub.pid
+      // so `vnodes daemon stop --hub` can find it — not a project pidfile.
       const hub = !!flags.hub;
       if (sub === 'run') d.serve(hub ? null : projectRoot);  // foreground (internal)
       else if (sub === 'start') {
@@ -69,14 +138,35 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
         const st = d.daemonState(projectRoot);
         if (st.running) out(`already running pid=${st.pid} port=${st.port}`);
         else { const pid = d.startDetached(projectRoot); out(`daemon starting pid=${pid} (http://127.0.0.1:${loadConfig(projectRoot).mcp.port})`); }
-      } else if (sub === 'stop') out(d.stopDaemon(projectRoot));
-      else out(d.daemonState(projectRoot));
+      } else if (sub === 'stop') out(d.stopDaemon(hub ? null : projectRoot));
+      else out(d.daemonState(hub ? null : projectRoot));
       break;
     }
     case 'call': { // HTTP tool call with auto-restart (BR-024)
       const { httpCall } = require('../src/daemon');
       const tool = args.shift();
       const a = flags.args ? JSON.parse(flags.args) : {};
+      const cfg = loadConfig(projectRoot);
+      // If something is already bound to the configured port, it may be a hub
+      // or another project's daemon. POST /rpc would then write the wrong tree.
+      let status = null;
+      try {
+        const res = await fetch(`http://127.0.0.1:${cfg.mcp.port}/status`, { signal: AbortSignal.timeout(800) });
+        if (res.ok) status = await res.json();
+      } catch {}
+      if (status && status.daemon === 'running') {
+        const hubDaemon = status.index?.state === 'hub' || status.project == null;
+        if (hubDaemon) {
+          out({ error: 'this daemon has no launch project (hub mode); run tools against a project daemon or use the CLI' });
+          process.exitCode = 1;
+          break;
+        }
+        if (status.project && realpathOrResolve(status.project) !== realpathOrResolve(projectRoot) && !flags.force) {
+          out({ error: `daemon on port ${cfg.mcp.port} is serving ${status.project}, not ${projectRoot}; pass --force to call it anyway` });
+          process.exitCode = 1;
+          break;
+        }
+      }
       out(await httpCall(projectRoot, tool, a, 'cli'));
       break;
     }
@@ -195,7 +285,7 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       if (sub === 'hide') { out(reg.hide(args[0])); break; }
       if (sub === 'show') { out(reg.show(args[0])); break; }
       if (sub === 'forget') { out(reg.forget(args[0])); break; }
-      out(`vnodes kb: no subcommand "${sub}". Use: list | register [path] | forget <id> | hide <id> | show <id>`);
+      out(`vnodes kb: no subcommand "${sub}". Use: list | discover [path...] | register [path] | forget <id> | hide <id> | show <id>`);
       break;
     }
     case 'setup': { // agent setup (M5)
@@ -245,7 +335,6 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
     case 'map': {
       const { daemonState, startDetached } = require('../src/daemon');
       const cfg = loadConfig(projectRoot);
-      if (!daemonState(projectRoot).running) { startDetached(projectRoot); await new Promise(r => setTimeout(r, 700)); }
       // `vnodes map <target>` scopes the map the same way `vnodes impact` does.
       const qs = [];
       if (cmd === 'map' && args[0]) qs.push(`target=${encodeURIComponent(args.join(' '))}`);
@@ -263,7 +352,7 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       let uiPath = '';
       if (cmd === 'ui') {
         const page = args.shift();
-        const PAGES = { overview: '', status: '/status', map: '/map', capsule: '/capsule', notes: '/notes', index: '/index' };
+        const PAGES = { overview: '', status: '/status', map: '/map', capsule: '/capsule', notes: '/notes', index: '/index', bases: '/bases' };
         if (page !== undefined && !(page in PAGES)) {
           out(`vnodes ui: no page "${page}". Pages: ${Object.keys(PAGES).join(', ')}`);
           break;
@@ -273,6 +362,7 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
         if (page === 'capsule' && flags.preset) qs.push(`preset=${encodeURIComponent(flags.preset)}`);
         if (page === 'notes' && flags.q) qs.push(`q=${encodeURIComponent(flags.q)}`);
       }
+      if (!daemonState(projectRoot).running) { startDetached(projectRoot); await new Promise(r => setTimeout(r, 700)); }
       /**
        * Name the project in the URL, instead of relying on which directory the
        * daemon happened to be launched in.
@@ -283,11 +373,12 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
        * pasted somewhere — and bare /ui is now the picker, which is why the
        * CLI has to say.
        *
-       * /ui/status is the exception: it is the plain-HTML floor and reports on
+       * /ui/status is one exception: it is the plain-HTML floor and reports on
        * the daemon's own project only, so attaching a selector there would be a
-       * URL that promises something the page cannot do.
+       * URL that promises something the page cannot do. /ui/bases is the other:
+       * it IS the picker, so ?kb= would hide the list behind one project.
        */
-      const scoped = !(cmd === 'ui' && uiPath === '/status');
+      const scoped = !(cmd === 'ui' && (uiPath === '/status' || uiPath === '/bases'));
       if (scoped) {
         const kb = require('../src/registry').idForPath(projectRoot);
         const registered = kb && fs.existsSync(path.join(require('../src/registry').registryDir(), kb, 'kb.json'));
@@ -303,45 +394,10 @@ const out = o => console.log(typeof o === 'string' ? o : JSON.stringify(o, null,
       break;
     }
     case 'help':
+      printHelp();
+      break;
     default:
-      out(`vnodes — local-first code-graph context engine for AI agents
-
-usage: vnodes <command> [args] [--flags]
-
-  index                       build/update the graph (incremental via committed manifest)
-  reindex                     force full re-index (stops daemon, rebuilds store)
-  status                      index + daemon state
-  pipeline <task...>          one-call context capsule (--preset auto|explore|debug|modify|refactor, --max-tokens N, --repos a,b, --json)
-  skeleton <file>             signatures-only view (--detail minimal|standard|detailed)
-  impact <file-or-symbol>     who depends on this (--depth N)
-  flow <from> <to>            dependency path between two files/symbols
-  memory [recent|search <q>|save <text> [--file f] [--symbol s]]
-  workspace [setup --name N --repos alias=path,...]
-  kb [list|discover [path...]|register [path]|forget <id>|hide <id>|show <id>]
-                              the knowledge-base registry: every project this machine has indexed.
-                              a project is registered by INDEXING it; discover finds ones already on
-                              disk and registers them without indexing anything; forget removes the row and
-                              prints (never runs) the rm -rf that would remove the index itself
-  setup [--detect] [--only claude-code,cursor] [--personal]
-  daemon [start|stop|status] [--hub]
-                              HTTP transport on cfg.mcp.port (stdio is default).
-                              --hub serves the registry with no project of its own: it indexes
-                              nothing, watches nothing, and opens on the picker
-  call <tool> --args '{...}'  HTTP tool call (auto-starts daemon)
-  mcp [project-root]          stdio MCP server (what agents launch)
-  doctor                      read-only diagnostics, works with daemon down
-  logs [daemon|index] [--follow]
-  llm [status|enable|disable|runtime|ask <q>] [--runtime claude-code|pi] [--pi-model grok-4.5-latest|gpt-5.6-sol]
-  ui [page] [args]            open the operator UI for THIS project (the URL carries ?kb=<id>).
-                              bare http://127.0.0.1:<port>/ui with no ?kb= is the knowledge-base
-                              picker — every indexed project on this machine — and so is /ui/bases.
-                              pages: overview (default), map, capsule "<task>" [--preset p],
-                              notes [--q text], index, status (plain HTML, no bundle needed,
-                              reports on the daemon's own project only)
-  map [target|dir] [--path DIR] [--all] [--depth N] [--task "..."]
-                              open the live dependency map (scoped to target if given)
-                              draws code by default; --all includes markdown, json and config
-
-project: resolved upward from cwd (--project <path> to override)`);
+      printHelp();
+      process.exitCode = 1;
   }
 })().catch(e => { console.error(`vnodes: ${e.message}`); process.exit(1); });

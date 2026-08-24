@@ -148,6 +148,12 @@ export type KbList = {
   scan_capped: boolean
   shown: number
   hidden_count: number
+  /**
+   * 16-hex ids omitted from `kbs` because they are hidden. Ids only — never
+   * paths — so a hidden project can still be opened by a URL that already
+   * names it, without this payload disclosing where it lives.
+   */
+  hidden_ids?: string[]
   /** The last on-disk scan, when the daemon has run one. */
   discovery?: KbDiscovery | null
   total_db_bytes: number
@@ -254,6 +260,13 @@ export type Notes = {
   q?: string
   /** Totals behind the returned slice, so the page can say what it cut. */
   counts?: { total: number; manual: number; auto: number; stale: number }
+  /**
+   * Whether this read re-ran the stale-hash UPDATE. The UI is read-only, so
+   * the daemon currently sends false; printed rather than assumed.
+   */
+  staleness_refreshed?: boolean
+  /** The daemon's own sentence about those flags. Printed verbatim. */
+  staleness_note?: string
 }
 
 /**

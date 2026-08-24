@@ -28,6 +28,7 @@ import { Link } from '../shell/route'
 import { fetchComposition, rowPath } from '../shell/api'
 import type { Composition } from '../shell/api'
 import { useFeed } from '../shell/status'
+import { useKb } from '../shell/kb'
 
 const bytes = (value: number) =>
   value >= 1024 * 1024
@@ -38,6 +39,7 @@ const bytes = (value: number) =>
 
 export function IndexView() {
   const { status } = useFeed()
+  const kb = useKb()
   const [composition, setComposition] = useState<Composition | null>(null)
   const [error, setError] = useState('')
 
@@ -52,7 +54,7 @@ export function IndexView() {
     return () => {
       live = false
     }
-  }, [status?.index.last_index])
+  }, [kb, status?.index.last_index])
 
   if (error) {
     return (

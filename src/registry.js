@@ -423,6 +423,8 @@ function listKbs({ launchRoot = null, cfg = null, includeHidden = false } = {}) 
   const rows = [];
   let hiddenCount = 0;
   let totalDbBytes = 0;
+  /** 16-hex ids omitted because hidden — ids only, never their paths. */
+  const hiddenIds = [];
 
   for (const id of scan) {
     const edir = path.join(dir, id);
@@ -430,7 +432,7 @@ function listKbs({ launchRoot = null, cfg = null, includeHidden = false } = {}) 
     if (hidden) hiddenCount++;
     let rec;
     try { rec = readJson(path.join(edir, 'kb.json')); } catch (e) {
-      if (hidden && !includeHidden) continue;
+      if (hidden && !includeHidden) { hiddenIds.push(id); continue; }
       rows.push({
         id, path: null, name: id, state: 'unreadable', state_detail: `${STATE_DETAIL.unparseable}: ${e.message}`,
         hidden, is_launch: id === launchId, verdict: 'unreadable registry record', flags: [], agents: [],
@@ -439,7 +441,7 @@ function listKbs({ launchRoot = null, cfg = null, includeHidden = false } = {}) 
       });
       continue;
     }
-    if (hidden && !includeHidden) continue;
+    if (hidden && !includeHidden) { hiddenIds.push(id); continue; }
 
     // Two stats, and only two: the project directory and its index database.
     let state = 'ok';
@@ -512,6 +514,7 @@ function listKbs({ launchRoot = null, cfg = null, includeHidden = false } = {}) 
     scan_capped: scanCapped,
     shown: shown.length,
     hidden_count: hiddenCount,
+    hidden_ids: hiddenIds,
     total_db_bytes: totalDbBytes,
     kbs: shown,
     notes,

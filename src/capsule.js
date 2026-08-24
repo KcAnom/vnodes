@@ -5,7 +5,7 @@
 // Relevant memories attach with rationale (BR-014).
 const fs = require('node:fs');
 const path = require('node:path');
-const { openStore } = require('./store');
+const { openStore, openStoreReadOnly } = require('./store');
 const { buildSkeleton } = require('./skeleton');
 const { searchMemory } = require('./memory');
 const { loadWorkspace } = require('./workspace');
@@ -112,10 +112,29 @@ function readProjectFile(projectRoot, fileKey) {
 }
 function tryRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return null; } }
 
-function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repos, pivots: pivotCount = 2, session } = {}) {
-  const db = openStore(engDir);
+function openCapsuleStore(engDir, readOnly) {
+  // Prefer a read-only handle whenever index.db already exists so a GET cannot
+  // run WAL/DDL against a store it only meant to look at. readOnly additionally
+  // forbids creating the file: missing db is empty, never a new index.db.
+  if (readOnly || fs.existsSync(path.join(engDir, 'index.db'))) {
+    const db = openStoreReadOnly(engDir);
+    if (db) return db;
+    if (readOnly) return null;
+  }
+  return openStore(engDir);
+}
+
+function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repos, pivots: pivotCount = 2, session, readOnly = false } = {}) {
+  const db = openCapsuleStore(engDir, readOnly);
   const budget = max_tokens || cfg.capsule.max_tokens;
   const { intent, source: intentReason } = classifyIntent(task, preset, projectRoot);
+  if (!db) {
+    return {
+      intent, intent_reason: intentReason, budget_tokens: budget,
+      pivots: [], skeletons: [], memories: [], truncated: false, omitted: [],
+      memory_reserve_tokens: 0, used_tokens: 0, savings_pct: 0,
+    };
+  }
   const ranked = rankFiles(db, task, intent, repos);
   // Pivots carry full file content, so a giant test file with thousands of
   // symbol hits can out-score the real implementation on raw term volume.
@@ -157,7 +176,12 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
    * never more than the memories actually found, so a task with nothing stored
    * costs the content nothing at all.
    */
-  const found = searchMemory(engDir, task, { session, limit: 5 });
+  let found = [];
+  try {
+    found = searchMemory(engDir, task, { session, limit: 5, readOnly });
+  } catch (e) {
+    if (!readOnly || e.code !== 'ENOMEMORYDB') throw e;
+  }
   const memoryCost = found.map(m => estimateTokens(JSON.stringify(m)));
   const wanted = memoryCost.reduce((a, b) => a + b, 0);
   const reserve = Math.min(

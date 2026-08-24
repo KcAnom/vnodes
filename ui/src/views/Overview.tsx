@@ -63,7 +63,7 @@ export function Overview() {
     return () => {
       live = false
     }
-  }, [status?.index.last_index])
+  }, [kb, status?.index.last_index])
 
   if (!status) {
     return statusError ? (

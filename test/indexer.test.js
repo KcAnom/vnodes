@@ -318,6 +318,32 @@ test('files with no recognised language are not reported as excluded', () => {
     'it was never a candidate, so calling it excluded is noise');
 });
 
+test('a relative workspace secondary path is resolved against the workspace, not cwd', () => {
+  // excludedSummary used to walk `r.path` as-is. A secondary `../lib` then
+  // became a relative-from-cwd junk path, so the report silently omitted
+  // whatever the indexer actually skipped in that repo.
+  const root = fixture({
+    'main/src/app.ts': 'export function app() { return 1; }\n',
+    'lib/ok.ts': 'export function ok() { return 1; }\n',
+    'lib/secret.ts': 'export function secret() { return 1; }\n',
+    'lib/.gitignore': 'secret.ts\n',
+    'main/.vnodes/workspace.json': JSON.stringify({
+      name: 'ws', primary_alias: 'main',
+      repos: [
+        { alias: 'lib', path: '../lib' },
+        { alias: 'gone', path: '../does-not-exist' },
+      ],
+    }),
+  });
+  const primary = path.join(root, 'main');
+  const report = excludedSummary(primary);
+  const names = [...report.files, ...report.subtrees].map(i => i.path);
+  assert.ok(names.includes('lib/secret.ts'),
+    `relative secondary must resolve against workspace.baseDir; got ${names.join(', ') || '(none)'}`);
+  assert.strictEqual(names.filter(p => p.includes('does-not-exist')).length, 0,
+    'a missing secondary repo must be skipped, not walked');
+});
+
 test('index_status carries the exclusions, so an agent can ask why', () => {
   const root = fixture({
     'src/app.ts': 'export function app() { return 1; }\n',

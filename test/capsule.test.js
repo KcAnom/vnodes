@@ -101,6 +101,17 @@ test('an untruncated capsule omits nothing and says so', () => {
   assert.deepStrictEqual(c.omitted, []);
 });
 
+test('readOnly capsule does not create index.db when none exists', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-capsule-ro-'));
+  const engDir = path.join(root, '.vnodes');
+  fs.mkdirSync(engDir, { recursive: true });
+  const c = buildCapsule(root, engDir, loadConfig(root), { task: 'zebra', readOnly: true });
+  assert.deepStrictEqual(c.pivots, []);
+  assert.deepStrictEqual(c.skeletons, []);
+  assert.strictEqual(fs.existsSync(path.join(engDir, 'index.db')), false);
+  assert.strictEqual(fs.existsSync(path.join(engDir, 'memory.db')), false);
+});
+
 test('intent carries its provenance', () => {
   const { intentSource } = require('../src/capsule');
   assert.strictEqual(intentSource('anything at all', 'refactor'), 'preset');

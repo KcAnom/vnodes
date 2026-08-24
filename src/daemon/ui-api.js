@@ -310,6 +310,7 @@ function uiApi(pathname, q, ctx, send) {
       preset: q.preset || undefined,
       max_tokens: clamp(q.max_tokens, 500, 200000, undefined),
       session: 'ui',
+      readOnly: true,
     });
     return send(200, { kb, ...capsuleForUi(capsule, task, cfg, projectFlag) });
   }

@@ -4,13 +4,12 @@
  *
  * Two decisions carry the page.
  *
- * The default filter is not "everything". On this repo nineteen of nineteen
- * rows are `kind: 'auto'` and six of them have the summary `{}`, because every
- * tool call through `/rpc` writes one. A raw chronological feed would make the
- * best idea in the product look like a debug log, so what is shown by default
- * is what a person or a pipeline actually recorded, and the call log sits
- * behind a disclosure labelled for what it is. Nothing is hidden — the counts
- * are stated above the fold either way.
+ * The default filter is not "everything". Auto-capture is narrowed (BR-013)
+ * to orientation tools, workspace setup, and what a person saved — not every
+ * tool call. Leftover rows from the old rule still look like a debug log, so
+ * what is shown by default is what a person or a pipeline actually recorded,
+ * and the call log sits behind a disclosure labelled for what it is. Nothing
+ * is hidden — the counts are stated above the fold either way.
  *
  * And the sort is stale-first, not recent-first. A stale note is the only row
  * anywhere in this app that requires the reader to do something: it says a
@@ -65,7 +64,7 @@ export function NotesView() {
     return () => {
       live = false
     }
-  }, [q])
+  }, [q, kb])
 
   const rows = useMemo(
     () => [...(payload?.observations ?? payload?.results ?? [])],
@@ -179,8 +178,8 @@ export function NotesView() {
               <summary className="cursor-pointer px-3 py-2 text-[12px] select-none">
                 tool activity — a log of calls, not insights{' '}
                 <span className="text-muted-foreground">
-                  ({activity.length} row{activity.length === 1 ? '' : 's'}, written automatically by
-                  every tool call)
+                  ({activity.length} row{activity.length === 1 ? '' : 's'}, written by orientation
+                  tools, workspace setup, and manual saves — not by every tool call)
                 </span>
               </summary>
               <div className="border-t border-border px-1 py-1">
@@ -192,9 +191,21 @@ export function NotesView() {
       )}
 
       <footer className="border-t border-border pt-3 text-[12px] leading-relaxed text-muted-foreground">
-        Reading this page adds nothing to memory. Opening it does re-check which notes have gone
-        stale, which is the same recompute any agent's read triggers — it changes no text anyone
-        wrote.
+        Reading this page adds nothing to memory.
+        {payload?.staleness_note ? (
+          <> {payload.staleness_note}</>
+        ) : payload ? (
+          <>
+            {' '}
+            The daemon did not say whether these stale flags were re-checked; they are whatever the
+            last write left them.
+          </>
+        ) : null}
+        {payload && payload.staleness_refreshed === true
+          ? ' Stale flags were re-checked for this read.'
+          : payload && payload.staleness_refreshed === false
+            ? ' Stale flags were not re-checked for this read.'
+            : null}
       </footer>
     </div>
   )
