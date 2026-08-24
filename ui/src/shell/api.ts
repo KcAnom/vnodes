@@ -380,6 +380,17 @@ export async function fetchNotes(q: string, limit = 200): Promise<Notes> {
   return res.json()
 }
 
+export async function forgetNote(id: number): Promise<{ ok: boolean }> {
+  const url = withKb('/ui/api/notes/forget')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+  if (!res.ok) throw new Error(`${url} — ${res.status}`)
+  return res.json()
+}
+
 export async function saveNote(summary: string, extra: { file?: string; symbol?: string } = {}): Promise<{ saved: boolean }> {
   const url = withKb('/ui/api/notes')
   const res = await fetch(url, {

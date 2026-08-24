@@ -22,6 +22,19 @@ function readerDb(engDir, readOnly) {
   return db;
 }
 
+function deleteObservation(engDir, id) {
+  const db = openMemory(engDir);
+  const row = db.prepare('SELECT id, kind FROM observations WHERE id = ?').get(Number(id));
+  if (!row) { db.close(); return { ok: false, error: 'no such note', id }; }
+  if (row.kind !== 'manual') {
+    db.close();
+    return { ok: false, error: 'only findings (manual notes) can be deleted', id: row.id, kind: row.kind };
+  }
+  db.prepare('DELETE FROM observations WHERE id = ?').run(row.id);
+  db.close();
+  return { ok: true, id: row.id };
+}
+
 function captureObservation(engDir, { session, tool, summary, symbol = null, file = null, kind = 'auto' }) {
   const db = openMemory(engDir);
   let hash = null;
@@ -144,4 +157,4 @@ function sessionContext(engDir, { session = null, limit = 20, readOnly = false }
   }));
 }
 
-module.exports = { captureObservation, searchMemory, sessionContext, refreshStaleness };
+module.exports = { captureObservation, deleteObservation, searchMemory, sessionContext, refreshStaleness };

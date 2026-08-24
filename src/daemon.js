@@ -10,7 +10,7 @@ const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { loadConfig, findProjectRoot, engineDirPath } = require('./config');
 const { resolveKb, listKbs, ensureEntry, registryCfg, forget } = require('./registry');
-const { captureObservation } = require('./memory');
+const { captureObservation, deleteObservation } = require('./memory');
 const { TOOL_DEFS, callTool } = require('./tools');
 const { indexStatus } = require('./indexer');
 const { loadWorkspace } = require('./workspace');
@@ -228,6 +228,30 @@ function serve(projectRoot) {
             forgotten: results.filter(r => r.ok).map(r => r.id),
             results,
           });
+        } catch (e) {
+          return send(400, { error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/ui/api/notes/forget') {
+      const denial = uiDenial(req, boundPort());
+      if (denial) return send(403, { error: `refused: ${denial}` });
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+        return send(403, { error: 'refused: application/json required' });
+      }
+      const qn = Object.fromEntries(url.searchParams);
+      const resolved = resolveKb(qn.kb, projectRoot);
+      if (!resolved.ok) return send(resolved.code === 'no_default' ? 400 : 404, { ...resolved, hint: 'ids come from /ui/api/kbs' });
+      const engDir = engineDirPath(resolved.root);
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const out = deleteObservation(engDir, body.id);
+          return send(out.ok ? 200 : 404, { kb: resolved.id, ...out });
         } catch (e) {
           return send(400, { error: e.message });
         }

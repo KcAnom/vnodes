@@ -25,7 +25,7 @@ import { Input } from '../shell/Input'
 import { Stat } from '../shell/Stat'
 import { Link, navigate, useRoute } from '../shell/route'
 import { useKb } from '../shell/kb'
-import { fetchNotes, saveNote } from '../shell/api'
+import { fetchNotes, saveNote, forgetNote } from '../shell/api'
 import type { Memory, Notes } from '../shell/api'
 import { relativeTime } from '../shell/time'
 import { cn } from '../kit/utils'
@@ -221,7 +221,14 @@ export function NotesView() {
                 page only ever reads.
               </p>
             ) : (
-              <List rows={notes} />
+              <List
+                rows={notes}
+                onForgotten={() => {
+                  fetchNotes(q)
+                    .then(setPayload)
+                    .catch((cause: Error) => setError(cause.message))
+                }}
+              />
             )}
           </section>
 
@@ -263,17 +270,33 @@ export function NotesView() {
   )
 }
 
-function List({ rows, showRationale }: { rows: Memory[]; showRationale?: boolean }) {
+function List({
+  rows,
+  showRationale,
+  onForgotten,
+}: {
+  rows: Memory[]
+  showRationale?: boolean
+  onForgotten?: () => void
+}) {
   return (
     <ul className="flex flex-col">
       {rows.map((row) => (
-        <Row key={row.id} row={row} showRationale={showRationale} />
+        <Row key={row.id} row={row} showRationale={showRationale} onForgotten={onForgotten} />
       ))}
     </ul>
   )
 }
 
-function Row({ row, showRationale }: { row: Memory; showRationale?: boolean }) {
+function Row({
+  row,
+  showRationale,
+  onForgotten,
+}: {
+  row: Memory
+  showRationale?: boolean
+  onForgotten?: () => void
+}) {
   return (
     <li
       className={cn(
@@ -286,6 +309,20 @@ function Row({ row, showRationale }: { row: Memory; showRationale?: boolean }) {
         <p className="min-w-0 flex-1 text-[13px] break-words">
           {row.summary || <span className="text-muted-foreground">(no summary was recorded)</span>}
         </p>
+        {row.kind === 'manual' && onForgotten ? (
+          <button
+            type="button"
+            title="remove this finding"
+            onClick={async () => {
+              if (!window.confirm('Remove this finding?')) return
+              await forgetNote(row.id)
+              onForgotten()
+            }}
+            className="shrink-0 font-mono text-[10px] text-muted-foreground hover:text-accent"
+          >
+            remove
+          </button>
+        ) : null}
         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{row.tool}</span>
       </div>
 

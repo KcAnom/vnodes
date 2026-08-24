@@ -91,3 +91,18 @@ test('a stale finding is still returned, carrying its warning (BR-015)', () => {
   assert.ok(stale, 'a stale finding was dropped instead of demoted');
   assert.match(stale.warning, /stale/);
 });
+
+test('a finding can be deleted; a task record cannot', () => {
+  const { deleteObservation } = require('../src/memory');
+  const engDir = store();
+  const hits = searchMemory(engDir, TASK, { limit: 5, readOnly: true, findingsOnly: true });
+  const id = hits[0].id;
+  assert.deepEqual(deleteObservation(engDir, id), { ok: true, id });
+  assert.equal(searchMemory(engDir, TASK, { findingsOnly: true, readOnly: true }).length, 0);
+  const log = sessionContext(engDir, { limit: 10, readOnly: true });
+  const taskRow = log.find(r => r.tool === 'run_pipeline');
+  assert.ok(taskRow);
+  const blocked = deleteObservation(engDir, taskRow.id);
+  assert.equal(blocked.ok, false);
+  assert.match(blocked.error, /only findings/);
+});

@@ -514,6 +514,14 @@ test('POST /ui/api/notes writes a finding without /rpc', async () => {
     const { searchMemory } = require('../src/memory');
     const hits = searchMemory(proj.eng, 'resolveKb', { findingsOnly: true, readOnly: true });
     assert.ok(hits.some(h => h.kind === 'manual' && /resolveKb/.test(h.summary)));
+    const id = hits.find(h => h.kind === 'manual').id;
+    const gone = await fetch(`${base}/ui/api/notes/forget?kb=${proj.id}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ id }),
+    });
+    assert.strictEqual(gone.status, 200);
+    assert.equal(searchMemory(proj.eng, 'resolveKb', { findingsOnly: true, readOnly: true }).length, 0);
   } finally {
     handle.close();
     delete process.env.VNODES_PORT;

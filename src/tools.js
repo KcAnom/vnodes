@@ -11,7 +11,7 @@ const { runIndex, indexStatus } = require('./indexer');
 const { buildCapsule } = require('./capsule');
 const { buildSkeleton } = require('./skeleton');
 const { impactGraph, logicFlow } = require('./graph');
-const { captureObservation, searchMemory, sessionContext } = require('./memory');
+const { captureObservation, deleteObservation, searchMemory, sessionContext } = require('./memory');
 const { setupWorkspace, loadWorkspace } = require('./workspace');
 const { openStore } = require('./store');
 const { idForPath } = require('./registry');
@@ -33,6 +33,8 @@ const TOOL_DEFS = [
     inputSchema: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'number' } }, required: ['query'] } },
   { name: 'save_observation', description: 'Save a manual observation, optionally linked to a symbol/file for staleness tracking.',
     inputSchema: { type: 'object', properties: { summary: { type: 'string' }, symbol: { type: 'string' }, file: { type: 'string' } }, required: ['summary'] } },
+  { name: 'forget_observation', description: 'Delete a manual finding by id (the diary, not pipeline activity).',
+    inputSchema: { type: 'object', properties: { id: { type: 'number', description: 'observation id from search_memory or get_session_context' } }, required: ['id'] } },
   { name: 'index_status', description: 'Index health: state, file/node/edge counts, repos, languages, last index time.',
     inputSchema: { type: 'object', properties: {} } },
   { name: 'create_knowledge_base', description: 'Make this directory (or `path`) a vnodes knowledge base and index it. This is how a knowledge base is created — every other tool refuses a directory that is not one yet, and points here. Creates the directory if it does not exist, so an agent in an empty terminal can name a new folder and get a knowledge base about it in one call. Safe to call twice: an existing knowledge base is re-indexed, not duplicated.',
@@ -232,6 +234,9 @@ function dispatch(projectRoot, name, args, session) {
     case 'save_observation':
       captureObservation(engDir, { session, tool: 'save_observation', kind: 'manual', summary: args.summary, symbol: args.symbol, file: args.file });
       result = { saved: true };
+      break;
+    case 'forget_observation':
+      result = deleteObservation(engDir, args.id);
       break;
     case 'index_status':
       result = ensureIndexed(projectRoot, cfg);
