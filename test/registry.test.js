@@ -436,6 +436,59 @@ test('a hub daemon owns no project and refuses to guess one', async () => {
   assert.ok(!fs.existsSync(path.join(registryDir(), 'hub.pid')), 'stopping the hub unlinks hub.pid');
 });
 
+test('POST /ui/api/kbs/forget removes registry rows and leaves the index', async () => {
+  const gone = fixtureProject('forget-gone');
+  const keep = fixtureProject('forget-keep');
+  fs.rmSync(gone.root, { recursive: true, force: true });
+  const port = await freePort();
+  process.env.VNODES_PORT = String(port);
+  const { serve } = require('../src/daemon');
+  const handle = serve(null);
+  const base = `http://127.0.0.1:${port}`;
+  const headers = {
+    origin: `http://127.0.0.1:${port}`,
+    host: `127.0.0.1:${port}`,
+    'content-type': 'application/json',
+  };
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { if ((await fetch(base + '/status')).ok) break; } catch {}
+      await new Promise(r => setTimeout(r, 20));
+    }
+    const evil = await fetch(`${base}/ui/api/kbs/forget`, {
+      method: 'POST',
+      headers: { ...headers, origin: 'https://evil.example' },
+      body: JSON.stringify({ ids: [gone.id] }),
+    });
+    assert.strictEqual(evil.status, 403);
+    const plain = await fetch(`${base}/ui/api/kbs/forget`, {
+      method: 'POST',
+      headers: { origin: `http://127.0.0.1:${port}`, host: `127.0.0.1:${port}`, 'content-type': 'text/plain' },
+      body: JSON.stringify({ ids: [gone.id] }),
+    });
+    assert.strictEqual(plain.status, 403);
+
+    const res = await fetch(`${base}/ui/api/kbs/forget`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ids: [gone.id, keep.id] }),
+    });
+    assert.strictEqual(res.status, 200);
+    const body = await res.json();
+    assert.deepStrictEqual(body.forgotten.sort(), [gone.id, keep.id].sort());
+    assert.ok(!fs.existsSync(path.join(registryDir(), gone.id)));
+    assert.ok(!fs.existsSync(path.join(registryDir(), keep.id)));
+    assert.ok(fs.existsSync(path.join(keep.root, '.vnodes', 'index.db')),
+      'forget is a registry operation — the live index stays');
+    const list = await fetch(`${base}/ui/api/kbs`).then(r => r.json());
+    assert.ok(!list.kbs.some(k => k.id === gone.id || k.id === keep.id));
+  } finally {
+    handle.close();
+    delete process.env.VNODES_PORT;
+  }
+});
+
+
 test('GET /status reports the bound port and a workspace object or null', async () => {
   const launch = fixtureProject('status-ws');
   fs.writeFileSync(path.join(launch.root, '.vnodes', 'workspace.json'), JSON.stringify({

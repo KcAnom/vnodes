@@ -24,19 +24,17 @@
  * holds, and a row whose `index.db` has been written since that cache was taken
  * says so rather than pretending the numbers are current.
  *
- * And it offers nothing that writes — not one control, not even a tempting one.
- * `index_status` is in `READ_ONLY_TOOLS` and its dispatch still calls
- * `ensureIndexed`, which is precisely how the 541,275-file index of somebody's
- * entire home directory came to exist: an agent asked a read-only question
- * while standing in `$HOME`. The home row in particular offers no re-index at
- * all, because that index has no `schema_version` in `meta` and `runIndex`
- * would open with four `DELETE FROM`s and then re-parse the home directory. The
- * remedy is a `rm -rf ~/.vnodes` the reader runs themselves, exactly the way
- * `ignore_suggestion` on the index page is a line you copy and never a button.
+ * It never indexes and never opens a project sqlite. The one write it is
+ * allowed is `vnodes kb forget`: take a row off this list. That is the
+ * registry, not the graph — gone temp dirs and any row the operator chooses.
+ * It does not `rm -rf` a live `.vnodes/`. The home accident still copies that
+ * command, because deleting half a million rows on their behalf is not a
+ * decision this page gets to make.
  */
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ArrowDownUp, Home, Library } from 'lucide-react'
+import { AlertTriangle, ArrowDownUp, Home, Library, Trash2 } from 'lucide-react'
 import type { KbDiscovery, KbRow } from '../shell/api'
+import { forgetKbs } from '../shell/api'
 import { Centered } from '../shell/Centered'
 import { Copyable } from '../shell/Copyable'
 import { Link } from '../shell/route'
@@ -98,7 +96,7 @@ function langs(row: KbRow): string {
 }
 
 export function Bases() {
-  const { kbs, kbsError } = useFeed()
+  const { kbs, kbsError, reloadKbs } = useFeed()
   const [sort, setSort] = useState<Sort>('recent')
 
   const rows = useMemo(() => {
@@ -144,12 +142,26 @@ export function Bases() {
       <p className="text-[13px] leading-relaxed text-muted-foreground">
         A knowledge base is one indexed project — <code className="font-mono">{'<project>'}/.vnodes/index.db</code>.
         Any project an agent indexes with vnodes shows up here on its own; this page never starts an
-        index and never writes to one.
+        index and never writes to one. Remove takes a row off the list (the registry). It does not
+        delete a live project&apos;s <code className="font-mono">.vnodes</code>.
       </p>
+
+      {rows.filter((row) => row.state === 'missing' || row.state === 'engine_removed').length > 0 && (
+        <div className="flex items-center gap-2">
+          <ForgetButton
+            ids={rows
+              .filter((row) => row.state === 'missing' || row.state === 'engine_removed')
+              .map((row) => row.id)}
+            label={`remove ${rows.filter((row) => row.state === 'missing' || row.state === 'engine_removed').length} gone`}
+            detail="These project directories are already gone (or their index.db is). This only drops the leftover registry rows."
+            onDone={reloadKbs}
+          />
+        </div>
+      )}
 
       <ul className="overflow-hidden rounded border border-border">
         {rows.map((row) => (
-          <Row key={row.id} row={row} />
+          <Row key={row.id} row={row} onForgotten={reloadKbs} />
         ))}
       </ul>
 
@@ -169,7 +181,7 @@ export function Bases() {
 /** Which rows are safe to click into. A gone directory has no pages to show. */
 const REACHABLE: KbRow['state'][] = ['ok', 'never_completed']
 
-function Row({ row }: { row: KbRow }) {
+function Row({ row, onForgotten }: { row: KbRow; onForgotten: () => void }) {
   const reachable = REACHABLE.includes(row.state)
   const home = row.flags.includes('home_dir')
   const fresh = row.last_indexed_ms ?? row.last_activity_ms
@@ -285,24 +297,82 @@ function Row({ row }: { row: KbRow }) {
 
   return (
     <li className="border-b border-border last:border-b-0">
-      {reachable ? (
-        <Link
-          to={`/ui?kb=${row.id}`}
-          title={`${row.path} — ${row.verdict}`}
-          className="group block outline-none"
-        >
-          {body}
-        </Link>
-      ) : (
-        // Not a link, and deliberately still a row. A KB whose directory is
-        // gone or unreadable has no pages to open, but dropping it would make
-        // the registry quietly shorter than the truth — and `unreadable` in
-        // particular is usually a drive that is not plugged in.
-        <div title={row.path}>{body}</div>
-      )}
+      <div className="flex items-stretch">
+        <div className="min-w-0 flex-1">
+          {reachable ? (
+            <Link
+              to={`/ui?kb=${row.id}`}
+              title={`${row.path} — ${row.verdict}`}
+              className="group block outline-none"
+            >
+              {body}
+            </Link>
+          ) : (
+            <div title={row.path}>{body}</div>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center pr-3">
+          <ForgetButton
+            ids={[row.id]}
+            label="remove"
+            detail={
+              row.state === 'missing' || row.state === 'engine_removed'
+                ? `${row.name} is already gone from disk. This drops the leftover registry row.`
+                : `Remove ${row.name} from this list? The index at ${row.path}/.vnodes is not deleted.`
+            }
+            onDone={onForgotten}
+          />
+        </div>
+      </div>
       {home && <HomeAccident row={row} />}
       {!reachable && <Broken row={row} />}
     </li>
+  )
+}
+
+function ForgetButton({
+  ids,
+  label,
+  detail,
+  onDone,
+}: {
+  ids: string[]
+  label: string
+  detail: string
+  onDone: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const go = async (event: { preventDefault: () => void; stopPropagation: () => void }) => {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!ids.length) return
+    if (!window.confirm(detail)) return
+    setBusy(true)
+    setErr('')
+    try {
+      await forgetKbs(ids)
+      onDone()
+    } catch (cause) {
+      setErr(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <span className="inline-flex flex-col items-end gap-0.5">
+      <button
+        type="button"
+        onClick={go}
+        disabled={busy || ids.length === 0}
+        title={detail}
+        className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+      >
+        <Trash2 className="size-3" />
+        {busy ? 'removing…' : label}
+      </button>
+      {err ? <span className="max-w-40 text-right text-[10px] text-accent">{err}</span> : null}
+    </span>
   )
 }
 
@@ -362,9 +432,6 @@ function Broken({ row }: { row: KbRow }) {
           ? ' · nothing here has been deleted as far as this page can tell'
           : ''}
       </span>
-      {/* The line that takes it off the list, and only that. Nothing on this
-          page re-indexes, re-creates or deletes anything. */}
-      <Copyable text={row.forget_command} className="ml-auto" />
     </div>
   )
 }

@@ -351,6 +351,23 @@ export const fetchComposition = () => getJson<Composition>('/ui/api/composition'
 export const fetchTools = () => getJson<Tools>('/tools', { scoped: false })
 export const fetchKbs = () => getJson<KbList>('/ui/api/kbs', { scoped: false })
 
+/**
+ * Remove registry rows. Same as `vnodes kb forget`: the picker shortens, the
+ * index on disk is not touched. The one write this UI is allowed — it does not
+ * go through /rpc and does not insert an observation.
+ */
+export async function forgetKbs(ids: string[]): Promise<{ forgotten: string[] }> {
+  const res = await fetch('/ui/api/kbs/forget', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  const type = res.headers.get('content-type') ?? ''
+  if (!res.ok) throw new Error(`/ui/api/kbs/forget — ${res.status}`)
+  if (!type.includes('json')) throw new Error('/ui/api/kbs/forget answered without JSON')
+  return res.json()
+}
+
 export function fetchNotes(q: string, limit = 200): Promise<Notes> {
   const params = new URLSearchParams({ limit: String(limit) })
   if (q) params.set('q', q)

@@ -50,6 +50,8 @@ export type Feed = {
    * before rather than blocking the page on it.
    */
   kbsError: string
+  /** Bypass the focus debounce — after a forget the list must change now. */
+  reloadKbs: () => void
 }
 
 const FeedContext = createContext<Feed>({
@@ -60,6 +62,7 @@ const FeedContext = createContext<Feed>({
   refreshMs: DEFAULT_REFRESH_S * 1000,
   kbs: null,
   kbsError: '',
+  reloadKbs: () => {},
 })
 
 export function StatusFeed({ children }: { children: ReactNode }) {
@@ -107,9 +110,9 @@ export function StatusFeed({ children }: { children: ReactNode }) {
   const lastKbs = useRef(0)
   const alive = useRef(true)
 
-  const readKbs = useCallback(() => {
+  const readKbs = useCallback((force = false) => {
     const now = Date.now()
-    if (now - lastKbs.current < KBS_MIN_GAP_MS) return
+    if (!force && now - lastKbs.current < KBS_MIN_GAP_MS) return
     lastKbs.current = now
     fetchKbs()
       .then((next) => {
@@ -119,20 +122,22 @@ export function StatusFeed({ children }: { children: ReactNode }) {
       })
       .catch((cause: Error) => alive.current && setKbsError(cause.message))
   }, [])
+  const reloadKbs = useCallback(() => readKbs(true), [readKbs])
 
   useEffect(() => {
     alive.current = true
     readKbs()
-    window.addEventListener('focus', readKbs)
+    const onFocus = () => readKbs()
+    window.addEventListener('focus', onFocus)
     return () => {
       alive.current = false
-      window.removeEventListener('focus', readKbs)
+      window.removeEventListener('focus', onFocus)
     }
   }, [readKbs])
 
   const value = useMemo(
-    () => ({ status, statusError, health, healthError, refreshMs, kbs, kbsError }),
-    [status, statusError, health, healthError, refreshMs, kbs, kbsError],
+    () => ({ status, statusError, health, healthError, refreshMs, kbs, kbsError, reloadKbs }),
+    [status, statusError, health, healthError, refreshMs, kbs, kbsError, reloadKbs],
   )
   return <FeedContext.Provider value={value}>{children}</FeedContext.Provider>
 }

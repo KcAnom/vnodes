@@ -9,7 +9,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { loadConfig, findProjectRoot, engineDirPath } = require('./config');
-const { resolveKb, listKbs, ensureEntry, registryCfg } = require('./registry');
+const { resolveKb, listKbs, ensureEntry, registryCfg, forget } = require('./registry');
 const { TOOL_DEFS, callTool } = require('./tools');
 const { indexStatus } = require('./indexer');
 const { loadWorkspace } = require('./workspace');
@@ -188,6 +188,52 @@ function serve(projectRoot) {
     let url;
     try { url = new URL(req.url, `http://127.0.0.1:${port}`); }
     catch { return send(400, { error: 'malformed url', url: req.url }); }
+
+    // Registry forget — the one write the operator UI is allowed. It removes
+    // registry rows (the picker). It never indexes, never opens a project
+    // sqlite, never runs rm -rf on .vnodes. Same contract as `vnodes kb forget`.
+    if (req.method === 'POST' && url.pathname === '/ui/api/kbs/forget') {
+      const denial = uiDenial(req, boundPort());
+      if (denial) {
+        dlog(`ui forget refused: ${denial}`);
+        return send(403, { error: `refused: ${denial}`, detail: 'the /ui data routes answer this daemon\'s own pages only' });
+      }
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+        return send(403, { error: 'refused: application/json required' });
+      }
+      const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
+        ? Number(cfg.mcp.max_body_bytes) : 1048576;
+      const chunks = [];
+      let size = 0;
+      let tooBig = false;
+      req.on('data', c => {
+        if (tooBig) return;
+        size += c.length;
+        if (size > maxBody) {
+          tooBig = true;
+          send(413, { error: 'payload too large', limit: maxBody });
+          req.destroy();
+        } else chunks.push(c);
+      });
+      req.on('end', () => {
+        if (tooBig) return;
+        try {
+          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+          if (!ids.length) return send(400, { error: 'ids required' });
+          if (ids.length > 200) return send(400, { error: 'too many ids', limit: 200 });
+          const results = ids.map(id => forget(String(id)));
+          return send(200, {
+            forgotten: results.filter(r => r.ok).map(r => r.id),
+            results,
+          });
+        } catch (e) {
+          return send(400, { error: e.message });
+        }
+      });
+      return;
+    }
+
     // Gate on the parsed pathname, not on the raw URL's prefix. `startsWith('/ui')`
     // matched /uifoo and /ui-anything, and the branch ended in a catch-all that
     // returned 200 plus the status page for every unknown path under it. With
