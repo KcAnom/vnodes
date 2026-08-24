@@ -649,6 +649,8 @@ test('/ui data allows loopback Origin on any port; Host is still this daemon', (
     'Vite dev Origin is :5173 while Host is rewritten to the daemon');
   assert.strictEqual(uiDenial(req({ ...host, origin: 'http://localhost:5173' }), 7821), null);
   assert.strictEqual(uiDenial(req({ host: 'localhost:7821', origin: 'http://127.0.0.1:5173' }), 7821), null);
+  assert.strictEqual(uiDenial(req({ host: '[::1]:7821', origin: 'http://[::1]:7821' }), 7821), null,
+    'IPv6 localhost is still this machine');
 
   assert.match(uiDenial(req({ ...host, origin: 'https://evil.example' }), 7821), /origin/);
   assert.match(uiDenial(req({ ...host, origin: 'https://127.0.0.1:5173' }), 7821), /origin/,

@@ -89,11 +89,18 @@ function isLoopbackHttpOrigin(origin) {
   let u;
   try { u = new URL(origin); } catch { return false; }
   if (u.protocol !== 'http:') return false;
-  if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost') return false;
+  // WHATWG hostname for IPv6 is `::1` (no brackets). The mac app and browsers
+  // on some stacks speak [::1] as localhost.
+  if (u.hostname !== '127.0.0.1' && u.hostname !== 'localhost'
+    && u.hostname !== '::1' && u.hostname !== '[::1]') return false;
   if (u.username || u.password) return false;
   if (u.search || u.hash) return false;
   if (u.pathname && u.pathname !== '/') return false;
   return true;
+}
+
+function allowedHosts(port) {
+  return [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`];
 }
 
 /**
@@ -107,7 +114,7 @@ function isLoopbackHttpOrigin(origin) {
  * or curl. rpcDenial stays strict: writes are not the app's job.
  */
 function uiDenial(req, port) {
-  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  const hosts = allowedHosts(port);
   const origin = req.headers.origin;
   if (origin !== undefined && !isLoopbackHttpOrigin(origin)) return `origin ${origin}`;
   if (!hosts.includes(req.headers.host || '')) return `host ${req.headers.host || '(none)'}`;
@@ -117,7 +124,7 @@ function uiDenial(req, port) {
 
 /** Why this /rpc request is refused, or null if it is allowed. */
 function rpcDenial(req, port) {
-  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  const hosts = allowedHosts(port);
   const origin = req.headers.origin;
   // Absent Origin is the CLI, the MCP client and curl. Present-and-wrong is a
   // page in somebody's browser reaching a daemon it does not own.
@@ -189,6 +196,12 @@ function serve(projectRoot) {
     // silent" exists to rule out.
     if (req.method === 'GET' && (url.pathname === '/ui' || url.pathname.startsWith('/ui/'))) {
       const q = Object.fromEntries(url.searchParams);
+      // A typed /ui/map/ is the map. Exact PAGES.has used to 404 it on first
+      // load (the SPA cannot strip the slash until the bundle has run).
+      // Static assets keep their trailing slash so a missing file stays missing.
+      if (url.pathname.length > 1 && url.pathname.endsWith('/') && !url.pathname.startsWith('/ui/static/')) {
+        url.pathname = url.pathname.replace(/\/+$/, '');
+      }
       if (url.pathname === '/ui/theme.css') return send(200, uiThemeCss(), 'text/css');
       if (url.pathname.startsWith('/ui/static/')) {
         const { readAsset } = require('./view/shell');

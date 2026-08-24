@@ -126,6 +126,11 @@ test('the mac app WebView can load the hub picker and its same-origin APIs', asy
     });
     assert.strictEqual(overview.status, 200);
 
+    const trailing = await fetch(`${base}/ui/map/`, {
+      headers: { ...webview(port), accept: 'text/html' },
+    });
+    assert.strictEqual(trailing.status, 200, 'a typed /ui/map/ is the map, not a 404');
+
     const map = await fetch(`${base}/ui/map/data?kb=${proj.id}&path=src`, { headers: webview(port) });
     assert.strictEqual(map.status, 200);
 

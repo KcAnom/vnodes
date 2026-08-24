@@ -316,7 +316,9 @@ function uiApi(pathname, q, ctx, send) {
   }
   if (pathname === '/ui/api/notes') {
     const { searchMemory, sessionContext } = require('../memory');
-    const limit = clamp(q.limit, 1, 100, 20);
+    // Client fetchNotes default is 200. A silent clamp to 100 made the page
+    // say it asked for 200 and show 100. The cap is still a cap.
+    const limit = clamp(q.limit, 1, 200, 20);
     // Never created to answer a GET. A knowledge base with no memory store is a
     // real, sayable state — "no agent has recorded anything here yet" — and
     // saying it is better than the daemon writing a memory.db into a project
