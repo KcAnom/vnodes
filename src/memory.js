@@ -1,7 +1,8 @@
 'use strict';
-// M4 Session Memory. Every tool invocation auto-captured (BR-013); memories
-// auto-surface with a rationale inside pipeline/capsule responses (BR-014);
-// staleness: linked code changed → flagged + demoted, never deleted (BR-015).
+// M4 Session Memory. Findings are kind=manual (BR-013 narrowed: auto-capture
+// of every tool call filled the diary with argument JSON). Capsules attach
+// findings with a rationale (BR-014). Staleness: linked code changed → flagged
+// + demoted, never deleted (BR-015).
 const { openMemory, openStore, openMemoryReadOnly } = require('./store');
 
 /**
@@ -52,8 +53,18 @@ function refreshStaleness(engDir) {
   db.close();
 }
 
+const STOPWORDS = new Set([
+  'the', 'and', 'for', 'that', 'this', 'with', 'from', 'are', 'was', 'were',
+  'have', 'has', 'had', 'but', 'not', 'you', 'your', 'into', 'than', 'then',
+  'them', 'they', 'what', 'when', 'where', 'which', 'while', 'about', 'after',
+  'before', 'would', 'could', 'should', 'does', 'did', 'just', 'also', 'more',
+  'most', 'some', 'any', 'all', 'each', 'every', 'only', 'same', 'other',
+  'very', 'can', 'will', 'how', 'why', 'who', 'its', 'task',
+]);
+
 function terms(text) {
-  return [...new Set((text || '').toLowerCase().match(/[a-z_][a-z0-9_]{2,}/g) || [])];
+  return [...new Set((text || '').toLowerCase().match(/[a-z_][a-z0-9_]{2,}/g) || [])]
+    .filter(t => !STOPWORDS.has(t));
 }
 
 /**
@@ -77,12 +88,15 @@ const isTaskRecord = o => o.kind !== 'manual' && TASK_TOOLS.has(o.tool);
 // Relevance surface: term overlap between the task and stored observations.
 // Stale observations are demoted (score halved) but still returned with a
 // warning — never silently dropped (BR-015).
-function searchMemory(engDir, query, { session = null, limit = 8, readOnly = false } = {}) {
+function searchMemory(engDir, query, { session = null, limit = 8, readOnly = false, findingsOnly = false } = {}) {
   if (!readOnly) refreshStaleness(engDir);
   const db = readerDb(engDir, readOnly);
   const qTerms = terms(query);
-  const rows = db.prepare('SELECT * FROM observations ORDER BY ts DESC LIMIT 500').all();
+  let rows = db.prepare('SELECT * FROM observations ORDER BY ts DESC LIMIT 500').all();
   db.close();
+  // The diary is kind=manual. Task echoes and leftover auto rows are activity.
+  // Capsules attach the diary; sessionContext still returns the log.
+  if (findingsOnly) rows = rows.filter(o => o.kind === 'manual' && !isTaskRecord(o));
   const scored = rows.map(o => {
     // A task record is matched on what it produced, never on the task it
     // echoes. It stays eligible — a prior run linked to the same file is a

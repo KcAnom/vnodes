@@ -10,6 +10,7 @@ const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { loadConfig, findProjectRoot, engineDirPath } = require('./config');
 const { resolveKb, listKbs, ensureEntry, registryCfg, forget } = require('./registry');
+const { captureObservation } = require('./memory');
 const { TOOL_DEFS, callTool } = require('./tools');
 const { indexStatus } = require('./indexer');
 const { loadWorkspace } = require('./workspace');
@@ -227,6 +228,55 @@ function serve(projectRoot) {
             forgotten: results.filter(r => r.ok).map(r => r.id),
             results,
           });
+        } catch (e) {
+          return send(400, { error: e.message });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/ui/api/notes') {
+      const denial = uiDenial(req, boundPort());
+      if (denial) {
+        dlog(`ui note refused: ${denial}`);
+        return send(403, { error: `refused: ${denial}` });
+      }
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+        return send(403, { error: 'refused: application/json required' });
+      }
+      const q = Object.fromEntries(url.searchParams);
+      const resolved = resolveKb(q.kb, projectRoot);
+      if (!resolved.ok) return send(resolved.code === 'no_default' ? 400 : 404, { ...resolved, hint: 'ids come from /ui/api/kbs' });
+      const engDir = engineDirPath(resolved.root);
+      const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
+        ? Number(cfg.mcp.max_body_bytes) : 1048576;
+      const chunks = [];
+      let size = 0;
+      let tooBig = false;
+      req.on('data', c => {
+        if (tooBig) return;
+        size += c.length;
+        if (size > maxBody) {
+          tooBig = true;
+          send(413, { error: 'payload too large', limit: maxBody });
+          req.destroy();
+        } else chunks.push(c);
+      });
+      req.on('end', () => {
+        if (tooBig) return;
+        try {
+          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const summary = String(body.summary || '').trim();
+          if (!summary) return send(400, { error: 'summary required' });
+          captureObservation(engDir, {
+            session: 'ui',
+            tool: 'ui_note',
+            kind: 'manual',
+            summary,
+            file: body.file ? String(body.file) : null,
+            symbol: body.symbol ? String(body.symbol) : null,
+          });
+          return send(200, { saved: true, kb: resolved.id });
         } catch (e) {
           return send(400, { error: e.message });
         }

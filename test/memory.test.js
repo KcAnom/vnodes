@@ -40,6 +40,12 @@ function store() {
   return engDir;
 }
 
+test('capsules attach findings only, never task echoes', () => {
+  const hits = searchMemory(store(), TASK, { limit: 5, readOnly: true, findingsOnly: true });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].kind, 'manual');
+});
+
 test('a task record cannot outrank a finding by quoting the question back', () => {
   const hits = searchMemory(store(), TASK, { limit: 5, readOnly: true });
   assert.ok(hits.length >= 2, 'expected both rows to be eligible');

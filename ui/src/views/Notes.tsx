@@ -4,12 +4,9 @@
  *
  * Two decisions carry the page.
  *
- * The default filter is not "everything". Auto-capture is narrowed (BR-013)
- * to orientation tools, workspace setup, and what a person saved — not every
- * tool call. Leftover rows from the old rule still look like a debug log, so
- * what is shown by default is what a person or a pipeline actually recorded,
- * and the call log sits behind a disclosure labelled for what it is. Nothing
- * is hidden — the counts are stated above the fold either way.
+ * The diary is what someone chose to write down (`kind: manual`). Pipeline
+ * runs and leftover auto-rows are a call log, not findings, and they sit
+ * behind a disclosure. Capsules attach the diary, never the log.
  *
  * And the sort is stale-first, not recent-first. A stale note is the only row
  * anywhere in this app that requires the reader to do something: it says a
@@ -28,17 +25,63 @@ import { Input } from '../shell/Input'
 import { Stat } from '../shell/Stat'
 import { Link, navigate, useRoute } from '../shell/route'
 import { useKb } from '../shell/kb'
-import { fetchNotes } from '../shell/api'
+import { fetchNotes, saveNote } from '../shell/api'
 import type { Memory, Notes } from '../shell/api'
 import { relativeTime } from '../shell/time'
 import { cn } from '../kit/utils'
 
-/**
- * A row is a note when a person wrote it, or when a pipeline run captured what
- * it decided. Everything else is the fact that a tool was called.
- */
-const NOTE_TOOLS = new Set(['run_pipeline', 'get_context_capsule'])
-const isNote = (row: Memory) => row.kind === 'manual' || NOTE_TOOLS.has(row.tool)
+const isNote = (row: Memory) => row.kind === 'manual'
+
+function Compose({ onSaved }: { onSaved: () => void }) {
+  const [summary, setSummary] = useState('')
+  const [file, setFile] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const go = async (event: { preventDefault: () => void }) => {
+    event.preventDefault()
+    const text = summary.trim()
+    if (!text) return
+    setBusy(true)
+    setErr('')
+    try {
+      await saveNote(text, file.trim() ? { file: file.trim() } : {})
+      setSummary('')
+      setFile('')
+      onSaved()
+    } catch (cause) {
+      setErr(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <form onSubmit={go} className="flex flex-col gap-1.5">
+      <textarea
+        value={summary}
+        onChange={(event) => setSummary(event.target.value)}
+        placeholder="write a finding — this is what the next agent should know"
+        rows={3}
+        className="w-full resize-y rounded border border-border bg-background px-2 py-1.5 text-[13px] outline-none focus:border-border-active"
+      />
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Input
+          value={file}
+          onChange={(event) => setFile(event.target.value)}
+          placeholder="file (optional, for staleness)"
+          className="min-w-0 flex-1 font-mono text-[12px]"
+        />
+        <button
+          type="submit"
+          disabled={busy || !summary.trim()}
+          className="rounded border border-border px-2.5 py-1 text-[12px] hover:bg-panel-hover disabled:opacity-50"
+        >
+          {busy ? 'saving…' : 'keep'}
+        </button>
+      </div>
+      {err ? <p className="text-[11px] text-accent">{err}</p> : null}
+    </form>
+  )
+}
 
 /** Stale first, then newest. Both halves matter; the first one matters more. */
 const byUrgency = (a: Memory, b: Memory) =>
@@ -82,7 +125,8 @@ export function NotesView() {
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <h1 className="text-[17px]">notes</h1>
           <p className="text-[13px] text-muted-foreground">
-            What previous sessions wrote down, and which of it the code has moved out from under.
+            The diary for this project — findings someone chose to keep. Capsules attach these.
+            Tool-call history is a log, not this list.
           </p>
         </div>
 
@@ -103,6 +147,14 @@ export function NotesView() {
             <Stat label="stale" value={stale} on={stale > 0} />
           </li>
         </ul>
+
+        <Compose
+          onSaved={() => {
+            fetchNotes(q)
+              .then(setPayload)
+              .catch((cause: Error) => setError(cause.message))
+          }}
+        />
 
         {/* Sticky rather than a second scroll container: this column already
             scrolls, and a list that scrolls inside a page that scrolls is two
@@ -178,8 +230,8 @@ export function NotesView() {
               <summary className="cursor-pointer px-3 py-2 text-[12px] select-none">
                 tool activity — a log of calls, not insights{' '}
                 <span className="text-muted-foreground">
-                  ({activity.length} row{activity.length === 1 ? '' : 's'}, written by orientation
-                  tools, workspace setup, and manual saves — not by every tool call)
+                  ({activity.length} row{activity.length === 1 ? '' : 's'} — pipeline runs and
+                  leftover auto-capture, not findings)
                 </span>
               </summary>
               <div className="border-t border-border px-1 py-1">

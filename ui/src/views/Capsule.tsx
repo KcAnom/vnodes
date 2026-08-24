@@ -355,6 +355,12 @@ function Result({
         <BarLegend segments={segments} total={capsule.budget_tokens} />
       </section>
 
+      {capsule.memories.length === 0 && (
+        <p className="text-[13px] leading-relaxed text-muted-foreground">
+          No findings attached. The diary is empty or nothing matched this task — write one on
+          Notes, or have an agent record what it learned.
+        </p>
+      )}
       {capsule.memories.length > 0 && (
         <section>
           <h2 className="mb-2 text-[11px] tracking-wide text-muted-foreground uppercase">

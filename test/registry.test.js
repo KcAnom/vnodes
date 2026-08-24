@@ -488,6 +488,38 @@ test('POST /ui/api/kbs/forget removes registry rows and leaves the index', async
   }
 });
 
+test('POST /ui/api/notes writes a finding without /rpc', async () => {
+  const proj = fixtureProject('ui-note');
+  const port = await freePort();
+  process.env.VNODES_PORT = String(port);
+  const { serve } = require('../src/daemon');
+  const handle = serve(null);
+  const base = `http://127.0.0.1:${port}`;
+  const headers = {
+    origin: `http://127.0.0.1:${port}`,
+    host: `127.0.0.1:${port}`,
+    'content-type': 'application/json',
+  };
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { if ((await fetch(base + '/status')).ok) break; } catch {}
+      await new Promise(r => setTimeout(r, 20));
+    }
+    const res = await fetch(`${base}/ui/api/notes?kb=${proj.id}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ summary: 'resolveKb never path-joins caller text', file: 'src/registry.js' }),
+    });
+    assert.strictEqual(res.status, 200);
+    const { searchMemory } = require('../src/memory');
+    const hits = searchMemory(proj.eng, 'resolveKb', { findingsOnly: true, readOnly: true });
+    assert.ok(hits.some(h => h.kind === 'manual' && /resolveKb/.test(h.summary)));
+  } finally {
+    handle.close();
+    delete process.env.VNODES_PORT;
+  }
+});
+
 
 test('GET /status reports the bound port and a workspace object or null', async () => {
   const launch = fixtureProject('status-ws');

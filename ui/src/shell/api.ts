@@ -368,10 +368,27 @@ export async function forgetKbs(ids: string[]): Promise<{ forgotten: string[] }>
   return res.json()
 }
 
-export function fetchNotes(q: string, limit = 200): Promise<Notes> {
+export async function fetchNotes(q: string, limit = 200): Promise<Notes> {
   const params = new URLSearchParams({ limit: String(limit) })
   if (q) params.set('q', q)
-  return getJson<Notes>(`/ui/api/notes?${params}`)
+  const url = withKb(`/ui/api/notes?${params}`)
+  const res = await fetch(url, { headers: { accept: 'application/json' } })
+  if (res.status === 404) return { observations: [], counts: { total: 0, manual: 0, auto: 0, stale: 0 } }
+  const type = res.headers.get('content-type') ?? ''
+  if (!res.ok) throw new Error(`${url} — ${res.status}`)
+  if (!type.includes('json')) throw new Error(`${url} answered without JSON`)
+  return res.json()
+}
+
+export async function saveNote(summary: string, extra: { file?: string; symbol?: string } = {}): Promise<{ saved: boolean }> {
+  const url = withKb('/ui/api/notes')
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ summary, ...extra }),
+  })
+  if (!res.ok) throw new Error(`${url} — ${res.status}`)
+  return res.json()
 }
 
 export function fetchCapsule(task: string, preset: string, maxTokens: string): Promise<Capsule> {

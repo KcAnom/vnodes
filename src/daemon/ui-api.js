@@ -343,7 +343,7 @@ function uiApi(pathname, q, ctx, send) {
       staleness_note: 'stale flags are as of the last index run or agent call; the read-only UI does not re-check them',
     };
     return query
-      ? send(200, { kb, query, results: searchMemory(engDir, query, { limit, readOnly: true }), counts, ...staleness })
+      ? send(200, { kb, query, results: searchMemory(engDir, query, { limit, readOnly: true, findingsOnly: true }), counts, ...staleness })
       : send(200, { kb, observations: sessionContext(engDir, { limit, readOnly: true }), counts, ...staleness });
   }
   if (pathname === '/ui/api/composition') {

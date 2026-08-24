@@ -178,7 +178,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
    */
   let found = [];
   try {
-    found = searchMemory(engDir, task, { session, limit: 5, readOnly });
+    found = searchMemory(engDir, task, { session, limit: 5, readOnly, findingsOnly: true });
   } catch (e) {
     if (!readOnly || e.code !== 'ENOMEMORYDB') throw e;
   }
