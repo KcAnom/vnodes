@@ -14,6 +14,7 @@ const { TOOL_DEFS, callTool } = require('./tools');
 const { indexStatus } = require('./indexer');
 const { loadWorkspace } = require('./workspace');
 const { log, logPath } = require('./logs');
+const { stalenessNotice } = require('./staleness');
 const { uiHtml, uiThemeCss, uiNotFound } = require('./daemon/pages');
 const { UI_API_ROUTES, uiApi, composition, cachedComposition, capsuleForUi,
         observationCounts, oversizeRefusal, tailLog } = require('./daemon/ui-api');
@@ -116,6 +117,8 @@ function rpcDenial(req, port) {
  * the app's daemon no longer has a project it could be wrong about.
  */
 function serve(projectRoot) {
+  // When this process loaded its code — see src/staleness.js.
+  const startedMs = Date.now();
   const hub = !projectRoot;
   const cfg = loadConfig(projectRoot);
   /** The last on-disk scan for knowledge bases, or null if none has run. */
@@ -285,7 +288,11 @@ function serve(projectRoot) {
         try {
           const { tool, arguments: args, session } = JSON.parse(body || '{}');
           const result = callTool(projectRoot, tool, args || {}, session || 'http');
-          send(200, { ok: true, result });
+          // Same vintage problem as the stdio server: this process has been
+          // running since it was started and answers with the code it loaded
+          // then. See src/staleness.js.
+          const stale = stalenessNotice(startedMs);
+          send(200, stale ? { ok: true, result, vnodes_stale: stale } : { ok: true, result });
         } catch (e) {
           dlog(`rpc error: ${e.message}`);
           send(400, { ok: false, error: e.message });

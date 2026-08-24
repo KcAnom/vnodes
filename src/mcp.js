@@ -5,10 +5,14 @@
 const { TOOL_DEFS, callTool } = require('./tools');
 const { findProjectRoot } = require('./config');
 const { log } = require('./logs');
+const { stalenessNotice } = require('./staleness');
 
 function startMcpStdio(projectRootArg) {
   const projectRoot = findProjectRoot(projectRootArg);
   const session = `mcp-${process.pid}`;
+  // When this process loaded its code. Everything it answers with is that
+  // vintage, however long it then runs — see src/staleness.js.
+  const startedMs = Date.now();
   let buf = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => {
@@ -49,7 +53,15 @@ function startMcpStdio(projectRootArg) {
         send({ jsonrpc: '2.0', id, result: { tools: TOOL_DEFS } });
       } else if (method === 'tools/call') {
         const result = callTool(projectRoot, params.name, params.arguments || {}, session);
-        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } });
+        // Attached to the answer, not logged. A caller reading a stale answer is
+        // the one who has to know it is stale, and the log is not where they are
+        // looking — this failure was found by comparing a process start time to
+        // a commit time by hand, hours after it started mattering.
+        const stale = stalenessNotice(startedMs);
+        const payload = (stale && result && typeof result === 'object' && !Array.isArray(result))
+          ? { ...result, vnodes_stale: stale }
+          : result;
+        send({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }] } });
       } else if (method === 'ping') {
         send({ jsonrpc: '2.0', id, result: {} });
       } else if (id !== undefined) {
