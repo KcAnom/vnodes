@@ -917,22 +917,28 @@ function uiHtml(cfg) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>vnodes — status</title>
 <link rel="stylesheet" href="/ui/theme.css"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body><main>
+<!-- The way back, before anything else. The rail that carries every other page
+     is inside the bundle, so a reader who arrives here has no navigation at all
+     unless this page provides its own — and this is a page people reach by
+     choice from that rail, not only by falling into it. If the bundle really is
+     broken these links land on the missing-bundle notice, which links back
+     here, so the loop closes either way. -->
+<nav aria-label="pages">
+<a href="/ui">&larr; overview</a>
+<a href="/ui/bases">knowledge bases</a>
+<a href="/ui/map">map</a>
+<a href="/ui/capsule">capsule</a>
+<a href="/ui/notes">notes</a>
+<a href="/ui/index">index composition</a>
+</nav>
 <h1>vnodes</h1><p id="state">loading…</p>
 <dl><dt>Files</dt><dd id="files">–</dd><dt>Nodes</dt><dd id="nodes">–</dd>
 <dt>Edges</dt><dd id="edges">–</dd><dt>Repos</dt><dd id="repos">–</dd>
 <dt>Last index</dt><dd id="last">–</dd></dl>
 <p>This is the plain-HTML status page. It reports on this daemon's own launch
 project only — the other pages can be pointed at any knowledge base with
-<code>?kb=</code>, and this one cannot. The pages that explain the counts need
-the built bundle:</p>
-<ul>
-<li><a href="/ui/bases">knowledge bases</a> — every indexed project this machine knows about</li>
-<li><a href="/ui">overview</a> — doctor checks, language mix, logs</li>
-<li><a href="/ui/map">dependency map</a></li>
-<li><a href="/ui/capsule">capsule preview</a> — what an agent is handed for a task</li>
-<li><a href="/ui/notes">notes &amp; staleness</a></li>
-<li><a href="/ui/index">index composition</a> — what is actually indexed</li>
-</ul>
+<code>?kb=</code>, and this one cannot. Every page linked above needs the built
+bundle; this one is the floor that does not.</p>
 <script>
 async function tick(){try{const r=await fetch('/status');const s=await r.json();
 if(s.index.state==='hub'){document.getElementById('state').textContent=
@@ -961,7 +967,13 @@ function uiThemeCss() {
 body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; line-height: 1.5; max-width: 46rem; }
 dt { font-weight: 600; }
 dd { margin: 0 0 0.5rem 0; }
-code, pre { font-family: inherit; }`;
+code, pre { font-family: inherit; }
+/* Navigation. Laid out with flex-wrap and a gap and nothing else: no colour of
+   its own, no custom properties, no border that has to resolve against a theme.
+   The default link colour already answers to color-scheme in both themes, and
+   this stylesheet dresses the two pages that must render when everything else
+   has failed — so every rule here is one that cannot itself be the failure. */
+nav { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.75rem; }`;
 }
 
 module.exports = {
@@ -971,4 +983,8 @@ module.exports = {
   // computed without a tool call.
   rpcDenial, uiDenial, composition, capsuleForUi, observationCounts, tailLog,
   oversizeRefusal, UI_API_ROUTES,
+  // The no-JS floor. Pinned because it is the one page that carries its own
+  // navigation: the rail lives in the bundle, so a reader who follows the
+  // rail's "plain" link arrives somewhere the rail cannot reach them.
+  uiHtml, uiThemeCss,
 };

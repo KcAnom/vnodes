@@ -731,3 +731,37 @@ test('a dead owner is taken over, not deferred to forever', () => {
   assert.strictEqual(claimIndexing(root, 41003), true, 'a stale pidfile must not block indexing forever');
   assert.strictEqual(JSON.parse(fs.readFileSync(pidPath, 'utf8')).port, 41003);
 });
+
+// The plain status page is reached from the rail's "plain" link, and the rail
+// is inside the bundle it deliberately does not depend on. Whatever navigation
+// it has, it has to carry itself — these pin that it does, and that every
+// destination is a page the daemon actually serves.
+
+test('the plain status page carries its own way back', () => {
+  const { uiHtml } = require('../src/daemon');
+  const html = uiHtml({ ui: { sidebar_refresh_s: 10 } });
+  assert.match(html, /<nav\b/, 'no nav on the one page the rail cannot reach');
+  const nav = html.slice(html.indexOf('<nav'), html.indexOf('</nav>'));
+  assert.match(nav, /href="\/ui"/, 'no link back to the app');
+  // Above the fold matters here: the reason this page reads as a dead end is
+  // navigation placed under the content, not the absence of links.
+  assert.ok(html.indexOf('<nav') < html.indexOf('<h1'), 'nav is not first');
+});
+
+test('every link on the plain page is a page the daemon serves', () => {
+  const { uiHtml, UI_API_ROUTES } = require('../src/daemon');
+  const { PAGES } = require('../src/view/shell');
+  const html = uiHtml({ ui: { sidebar_refresh_s: 10 } });
+  const hrefs = [...html.matchAll(/href="(\/[^"]*)"/g)].map(m => m[1]);
+  assert.ok(hrefs.length > 0);
+  for (const href of hrefs) {
+    const known = href === '/ui/status' || href === '/ui/theme.css' ||
+      PAGES.has(href) || UI_API_ROUTES?.has?.(href);
+    assert.ok(known, `plain page links to ${href}, which nothing serves`);
+  }
+});
+
+test('the no-bundle stylesheet styles the nav it now has', () => {
+  const { uiThemeCss } = require('../src/daemon');
+  assert.match(uiThemeCss(), /\bnav\b/);
+});
