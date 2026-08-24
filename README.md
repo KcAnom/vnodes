@@ -135,6 +135,20 @@ install path — so keep it at user scope in `~/.claude/skills/vnodes/`.
   everything works with the layer off.
 - macOS binary signing (ERR-004) and marketplace platform packaging (ERR-012)
   don't apply — this is plain Node source, no binaries.
+- BR-013's "every invocation auto-captured" is narrowed to invocations that
+  carry a finding: `run_pipeline`, the capsule, and `workspace_setup`. The rest
+  auto-captured their own arguments as the summary, so the feed filled with
+  rows reading `{}` and `{"target":"x"}` — 25 of them in one working session —
+  competing with real findings for the same relevance window. `run_pipeline`
+  keeps its capture because "task X → 3 pivots, 4000 tokens" is a record of
+  what was worked on, which is what a later session wants.
+- Tool results may carry a `vnodes_notice` field. The instruction block has
+  always said to orient with `run_pipeline` first; that is advisory, and
+  advisory lost — a session that shipped two features here made zero code
+  queries and saved zero findings, and nothing said so at the time. The notice
+  states what it knows (how many calls, what has not happened), rides on the
+  tools a non-orienting caller still uses, never blocks, and stops once the
+  thing it asks for has happened.
 - BR-002's "no explicit init step" is now qualified: a project indexes on first
   use once it has a `.vnodes/`, and a directory without one is refused with the
   command that would create it. BR-002 assumed the project was the one the

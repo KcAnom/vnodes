@@ -1,7 +1,8 @@
 'use strict';
 // The tool catalog (BR-011) — one dispatch shared by the stdio MCP server and
 // the HTTP daemon. All tools unconditionally available (BR-029). Every
-// invocation is auto-captured as an observation (BR-013).
+// invocation that carries a finding is auto-captured as an observation (BR-013,
+// narrowed — see callTool).
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -248,6 +249,47 @@ function dispatch(projectRoot, name, args, session) {
   return result;
 }
 
+/**
+ * What each session has actually done, for the notice below.
+ *
+ * In process rather than in the observations table, because the table is no
+ * longer a record of every call — that is the point of the capture rule above.
+ * Lost on restart, which is correct: a notice is about the session in front of
+ * you, and a restarted daemon is not that session.
+ */
+const sessions = new Map();
+
+const ORIENTS = new Set(['run_pipeline', 'get_context_capsule']);
+
+/**
+ * The one line that tells an agent it is working against the grain.
+ *
+ * The instruction block `vnodes setup` writes has always said to orient first.
+ * It is advisory, and advisory loses: measured on this repo on 2026-08-23, a
+ * whole working session — two features, three commits — ran on grep and Read
+ * with zero code queries, and left 25 observations that were all argument JSON
+ * and no findings. Nothing anywhere said so at the time.
+ *
+ * So it rides on the results of the tools an agent that is NOT orienting still
+ * calls, where it cannot be missed, and it says what it knows rather than
+ * scolding: how many calls, and what has not happened yet. It never blocks and
+ * it never repeats once the thing it asks for has happened.
+ */
+function sessionNotice(session, name) {
+  const s = sessions.get(session);
+  if (!s) return null;
+  if (!s.oriented && s.calls >= 3 && !ORIENTS.has(name)) {
+    return `${s.calls} tool calls this session and no run_pipeline. One orientation call returns the pivot files, the supporting skeletons and the prior findings for a task, inside a token budget — usually for less than a handful of individual lookups cost.`;
+  }
+  // Only once there is something worth recording: a session that has oriented
+  // has been handed prior findings, and is the one that can tell whether it
+  // learned anything the next session would want.
+  if (s.oriented && !s.saved && s.calls >= 8) {
+    return `${s.calls} tool calls this session and no save_observation. Findings live only in this context window until something writes them down; the graph rebuilds from code, memory does not.`;
+  }
+  return null;
+}
+
 function callTool(projectRoot, name, args = {}, session = 'default') {
   // The tool that creates a knowledge base cannot require one. It captures its
   // own observation, into the knowledge base it made, so it also returns before
@@ -258,14 +300,45 @@ function callTool(projectRoot, name, args = {}, session = 'default') {
   const refusal = knowledgeBaseGate(projectRoot);
   if (refusal) return refusal;
   const engDir = engineDir(projectRoot);
+
+  const s = sessions.get(session) || { calls: 0, oriented: false, saved: false };
+  s.calls++;
+  if (ORIENTS.has(name)) s.oriented = true;
+  if (name === 'save_observation') s.saved = true;
+  sessions.set(session, s);
+
   const result = dispatch(projectRoot, name, args, session);
-  // Auto-capture (BR-013) — skip save_observation itself (already stored as manual).
-  if (name !== 'save_observation') {
-    const brief = name.startsWith('run_') || name.includes('capsule')
+
+  /**
+   * Auto-capture, narrowed (BR-013).
+   *
+   * The blueprint said every invocation. Every invocation is what filled the
+   * feed with rows whose summary is the literal argument JSON — `{}` for an
+   * index_status, `{"target":"x"}` for an impact query — and those rows compete
+   * for the same 500-row relevance window as real findings. The READ_ONLY_TOOLS
+   * comment already records this failure for the /ui surface; agents produced it
+   * too, 25 rows in one session.
+   *
+   * The cut is by whether the row carries a finding, not by read versus write.
+   * run_pipeline and the capsule keep theirs: "task X → 3 pivots, 4000 tokens"
+   * is a record of what was worked on, which is exactly what a later session
+   * wants. Everything else auto-captured only its own arguments, which the
+   * caller already had.
+   */
+  const carriesAFinding = ORIENTS.has(name) || name === 'workspace_setup';
+  if (name !== 'save_observation' && carriesAFinding) {
+    const brief = ORIENTS.has(name)
       ? `task: ${args.task || ''} → intent=${result.intent}, ${result.pivots?.length || 0} pivots, ${result.skeletons?.length || 0} skeletons, ${result.used_tokens || 0} tokens`
       : JSON.stringify(args).slice(0, 200);
     const linkedFile = result?.pivots?.[0]?.file || (typeof args.file === 'string' ? args.file : null);
     captureObservation(engDir, { session, tool: name, summary: brief, file: linkedFile });
+  }
+
+  // Attached last, and only to an object result, so a tool that returns
+  // something else is never reshaped by a notice.
+  const notice = sessionNotice(session, name);
+  if (notice && result && typeof result === 'object' && !Array.isArray(result)) {
+    return { ...result, vnodes_notice: notice };
   }
   return result;
 }
@@ -289,4 +362,4 @@ function callToolReadOnly(projectRoot, name, args = {}, session = 'readonly') {
   return dispatch(projectRoot, name, args, session);
 }
 
-module.exports = { TOOL_DEFS, callTool, callToolReadOnly, READ_ONLY_TOOLS, ensureIndexed, knowledgeBaseGate };
+module.exports = { TOOL_DEFS, callTool, callToolReadOnly, READ_ONLY_TOOLS, ensureIndexed, knowledgeBaseGate, sessionNotice, _sessions: sessions };
