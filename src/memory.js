@@ -56,6 +56,24 @@ function terms(text) {
   return [...new Set((text || '').toLowerCase().match(/[a-z_][a-z0-9_]{2,}/g) || [])];
 }
 
+/**
+ * A row whose summary is a record of a task, written by the capsule itself.
+ *
+ * `run_pipeline` stores the task text verbatim — "task: <what you asked> →
+ * intent=…, 3 pivots" — and this function then scores by term overlap against
+ * that same text. Ask the same question twice and its own history matches
+ * perfectly: measured on this repo 2026-08-23, two of these scored 16.00 while
+ * the three real findings scored 5.50, 4.50 and 3.25, and after the memory
+ * reserve landed they were consuming about 40% of it.
+ *
+ * No weight fixes that, because the number is not wrong — the row really does
+ * contain every word of the query. What is wrong is the question being asked:
+ * against a task record, term overlap measures "is this the same question",
+ * and this function exists to answer "does this knowledge bear on it".
+ */
+const TASK_TOOLS = new Set(['run_pipeline', 'get_context_capsule']);
+const isTaskRecord = o => o.kind !== 'manual' && TASK_TOOLS.has(o.tool);
+
 // Relevance surface: term overlap between the task and stored observations.
 // Stale observations are demoted (score halved) but still returned with a
 // warning — never silently dropped (BR-015).
@@ -66,9 +84,20 @@ function searchMemory(engDir, query, { session = null, limit = 8, readOnly = fal
   const rows = db.prepare('SELECT * FROM observations ORDER BY ts DESC LIMIT 500').all();
   db.close();
   const scored = rows.map(o => {
-    const hay = `${o.summary} ${o.symbol || ''} ${o.file || ''} ${o.tool}`.toLowerCase();
+    // A task record is matched on what it produced, never on the task it
+    // echoes. It stays eligible — a prior run linked to the same file is a
+    // real, if weak, signal — it simply cannot win by quoting the question
+    // back. get_session_context still returns these in full: they are a record
+    // of activity, which is that surface's job and not this one's.
+    const hay = (isTaskRecord(o)
+      ? `${o.symbol || ''} ${o.file || ''} ${o.tool}`
+      : `${o.summary} ${o.symbol || ''} ${o.file || ''} ${o.tool}`).toLowerCase();
     const matched = qTerms.filter(t => hay.includes(t));
-    let score = matched.length + (o.kind === 'manual' ? 0.5 : 0);
+    // Kind multiplies rather than adds. The old +0.5 was set against match
+    // counts that reach double figures, where it is not a preference, it is a
+    // rounding error — a finding someone chose to write down should outrank a
+    // byproduct in proportion, not by a constant.
+    let score = matched.length * (o.kind === 'manual' ? 1.5 : 1);
     if (session && o.session === session) score += 0.25;
     if (o.stale) score *= 0.5;
     return { o, score, matched };
