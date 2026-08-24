@@ -173,16 +173,33 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     if (content == null) continue;
     const tok = estimateTokens(content);
     if (used + tok > pivotBudget) {
-      if (capsule.pivots.length > 0) {
-        // Pivot doesn't fit: degrade to skeleton rather than blow the budget.
+      /**
+       * A pivot that does not fit is clipped, wherever it ranked.
+       *
+       * It used to depend on position: the first pivot was clipped to fit, and
+       * every one after it was replaced by its signatures. So the same file got
+       * the head of its real source or none of it at all depending on whether
+       * something else happened to rank above it — and a pivot is by definition
+       * a file the graph says the task is about. Measured on this repo:
+       * src/daemon.js ranked second, did not fit, and came back as a list of 35
+       * function names while 12,676 tokens of the code the question was about
+       * were dropped.
+       *
+       * Clipping is what the budget contract (BR-008) asks for and what the
+       * first pivot already did. The floor is the one real limit: below
+       * min_clip_tokens a clip is a scrap of a file, and signatures across the
+       * whole of it say more than the first few lines of it. The first pivot
+       * clips regardless of the floor, because a capsule with no pivot at all
+       * answers nothing.
+       */
+      const room = Math.max(0, pivotBudget - used);
+      const worthClipping = room >= (cfg.capsule.min_clip_tokens ?? 400);
+      if (!worthClipping && capsule.pivots.length > 0) {
         supporters.unshift(p);
         capsule.omitted.push({ file: p.path, est_tokens: tok, reason: 'pivot-degraded-to-skeleton' });
         continue;
       }
-      // First pivot alone exceeds the budget: clip it to fit. A capsule with no
-      // pivot is useless, but an unbounded one breaks the budget contract
-      // (BR-008) — the head of the file plus its skeleton beats either extreme.
-      const clipped = content.slice(0, Math.max(0, pivotBudget - used) * 4);
+      const clipped = content.slice(0, room * 4);
       capsule.pivots.push({
         file: p.path, tokens: estimateTokens(clipped), content: clipped,
         clipped: true, full_tokens: tok,

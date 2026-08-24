@@ -6,7 +6,9 @@
     "savings_baseline": "65-70%",
     "skeleton_detail": "standard",
     "memory_reserve_tokens": 1000,
-    "memory_reserve_max_pct": 25
+    "memory_reserve_max_pct": 25,
+    "_comment_min_clip": "min_clip_tokens is the floor below which a pivot that does not fit is given as signatures instead of clipped source. Above it the file is clipped wherever it ranked, because a pivot is a file the graph says the task is about and whether something else outranked it is not a reason to withhold the code. Below it a clip is a scrap — the first few lines of a file say less than its signatures across the whole of it. The first pivot clips regardless: a capsule with no pivot answers nothing.",
+    "min_clip_tokens": 400
   },
   "llm": {
     "min_ram_gb": 6

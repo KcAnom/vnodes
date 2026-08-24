@@ -174,3 +174,70 @@ test('a memory that does not fit is named, not dropped in silence', () => {
   }
   assert.equal(c.truncated, true);
 });
+
+/**
+ * Clipping does not depend on where a file ranked.
+ *
+ * A pivot is a file the graph says the task is about. It used to get the head
+ * of its real source if it ranked first and none of it at all otherwise —
+ * signatures only — so whether an agent saw the code depended on what happened
+ * to outrank it. Measured on this repo: src/daemon.js ranked second, did not
+ * fit, and came back as 35 function names with 12,676 tokens of the code the
+ * question was about dropped.
+ */
+function twoBigLinkedFiles() {
+  const big = (n, tag) => Array.from({ length: n }, (_, i) =>
+    `export function ${tag}${i}() { /* ${'x'.repeat(60)} */ return ${i}; }`).join('\n');
+  return fixture({
+    'src/alpha.ts': `import { beta0 } from './beta'\n` + big(220, 'alpha'),
+    'src/beta.ts': big(220, 'beta'),
+  });
+}
+
+test('a pivot that ranked second is clipped, not reduced to signatures', () => {
+  const root = twoBigLinkedFiles();
+  // Sized so the second pivot genuinely does not fit: a budget where both fit
+  // whole proves nothing about what happens when one does not.
+  const c = capsule(root, { task: 'alpha beta', max_tokens: 12000 });
+  assert.ok(c.pivots.length >= 2, `expected two pivots, got ${c.pivots.length}`);
+  const second = c.pivots[1];
+  assert.equal(second.clipped, true, 'the second pivot fitted whole — this budget tests nothing');
+  assert.ok(second.content && second.content.length > 0, 'the second pivot carried no source');
+  assert.ok(c.used_tokens <= c.budget_tokens, 'clipping broke the budget contract');
+});
+
+test('below the floor it degrades: a scrap of a file is worse than its signatures', () => {
+  const root = twoBigLinkedFiles();
+  // A budget with room for one pivot and no meaningful room after it.
+  const c = capsule(root, { task: 'alpha beta', max_tokens: 4200 });
+  assert.equal(c.pivots.length, 1);
+  assert.ok(c.omitted.some(o => o.reason === 'pivot-degraded-to-skeleton'),
+    'nothing degraded, so a scrap was sent instead of signatures');
+  assert.ok(c.used_tokens <= c.budget_tokens);
+});
+
+test('the first pivot clips regardless of the floor — no pivot answers nothing', () => {
+  const root = twoBigLinkedFiles();
+  const c = capsule(root, { task: 'alpha beta', max_tokens: 300 });
+  assert.equal(c.pivots.length, 1, 'a budget under the floor left the capsule with no pivot at all');
+  assert.equal(c.pivots[0].clipped, true);
+  assert.ok(c.used_tokens <= c.budget_tokens);
+});
+
+test('a clipped pivot still gets its skeleton, so the cut symbols are visible', () => {
+  const root = twoBigLinkedFiles();
+  const c = capsule(root, { task: 'alpha beta', max_tokens: 12000 });
+  const clipped = c.pivots.filter(p => p.clipped);
+  assert.ok(clipped.length > 0, 'nothing clipped in this fixture');
+  for (const p of clipped) {
+    assert.ok(p.full_tokens > p.tokens, 'a clipped pivot must say what it would have cost');
+    // The skeleton is what makes a clip honest — it lists the symbols the clip
+    // cut off. It is queued ahead of every other supporter for that reason, but
+    // it is not exempt from the budget: a skeleton of a very large file can
+    // itself be too big to fit. What is NOT allowed is losing it in silence.
+    const shown = c.skeletons.some(s => s.file === p.file);
+    const said = c.omitted.some(o => o.file === p.file && o.reason === 'budget');
+    assert.ok(shown || said,
+      `${p.file} was clipped, got no skeleton, and nothing recorded why`);
+  }
+});
