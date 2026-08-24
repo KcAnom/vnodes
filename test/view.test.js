@@ -765,3 +765,25 @@ test('the no-bundle stylesheet styles the nav it now has', () => {
   const { uiThemeCss } = require('../src/daemon');
   assert.match(uiThemeCss(), /\bnav\b/);
 });
+
+// A mistyped /ui path is a browser event, not a script one. It answered with
+// raw JSON — the page names arrived as quoted strings nobody can click, which
+// is the plain page's dead end reached by typo instead of by button.
+
+test('a browser gets a page for an unknown /ui path, curl still gets JSON', () => {
+  const { uiNotFound } = require('../src/daemon');
+  const { PAGES } = require('../src/view/shell');
+  const html = uiNotFound('/ui/nope');
+  assert.match(html, /<nav\b/);
+  for (const page of PAGES.keys()) {
+    assert.match(html, new RegExp(`href="${page}"`), `404 page omits ${page}`);
+  }
+  assert.match(html, /href="\/ui\/status"/, 'no link to the page that needs no bundle');
+});
+
+test('the 404 page escapes the path it echoes', () => {
+  const { uiNotFound } = require('../src/daemon');
+  const html = uiNotFound('/ui/<script>alert(1)</script>');
+  assert.ok(!html.includes('<script>alert(1)</script>'), 'path echoed unescaped');
+  assert.match(html, /&lt;script&gt;/);
+});

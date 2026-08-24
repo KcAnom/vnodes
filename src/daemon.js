@@ -594,6 +594,15 @@ function serve(projectRoot) {
       }
       const { PAGES, renderShell } = require('./view/shell');
       if (PAGES.has(url.pathname)) return send(200, renderShell(url.pathname), 'text/html');
+      // A mistyped /ui path arrives from a browser's address bar far more often
+      // than from a script, and a browser rendering this as raw JSON gets the
+      // page names as quoted strings it cannot click — the same dead end the
+      // plain status page had, reached by typo instead of by button. Negotiated
+      // rather than switched outright: /ui/api callers and curl still want the
+      // JSON, and it is the same list either way.
+      if (String(req.headers.accept || '').includes('text/html')) {
+        return send(404, uiNotFound(url.pathname), 'text/html');
+      }
       return send(404, { error: 'no such page', pages: [...PAGES.keys()], api: UI_API_ROUTES });
     }
     if (req.method === 'POST' && req.url === '/rpc') {
@@ -906,6 +915,30 @@ function mapEvents(req, res, projectRoot, cfg, query, hello = {}) {
   req.on('close', () => clearInterval(timer));
 }
 
+/**
+ * The 404 a browser gets for a /ui path nothing serves.
+ *
+ * Shares the no-bundle stylesheet and the same nav as the plain status page,
+ * for the same reason: the rail lives in the bundle, and a reader who mistyped
+ * a URL never reached a page that could load it. The page list is the router's
+ * own `PAGES`, so it cannot drift from what is actually served.
+ */
+function uiNotFound(pathname) {
+  const { PAGES } = require('./view/shell');
+  const escape = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>vnodes — no such page</title>
+<link rel="stylesheet" href="/ui/theme.css"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body><main>
+<nav aria-label="pages">
+${[...PAGES.keys()].map(p => `<a href="${p}">${p === '/ui' ? '&larr; overview' : escape(p.replace('/ui/', ''))}</a>`).join('\n')}
+<a href="/ui/status">plain status</a>
+</nav>
+<h1>no such page</h1>
+<p><code>${escape(pathname)}</code> is not a page this daemon serves. Every page
+it does serve is linked above.</p>
+</main></body></html>`;
+}
+
 function uiHtml(cfg) {
   // The no-JS floor at /ui/status. This page exists precisely because the rest
   // of /ui is now a React bundle: when the bundle is missing, stale or throws
@@ -986,5 +1019,5 @@ module.exports = {
   // The no-JS floor. Pinned because it is the one page that carries its own
   // navigation: the rail lives in the bundle, so a reader who follows the
   // rail's "plain" link arrives somewhere the rail cannot reach them.
-  uiHtml, uiThemeCss,
+  uiHtml, uiThemeCss, uiNotFound,
 };
