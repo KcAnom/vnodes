@@ -787,3 +787,23 @@ test('the 404 page escapes the path it echoes', () => {
   assert.ok(!html.includes('<script>alert(1)</script>'), 'path echoed unescaped');
   assert.match(html, /&lt;script&gt;/);
 });
+
+/**
+ * The path startDetached spawns.
+ *
+ * `daemon start` prints a pid and returns before the child has done anything,
+ * so a child that cannot start looks identical to one that did: the pid is
+ * real, the exit is silent, and the log gains no line because nothing ever ran
+ * to write one. Splitting lifecycle.js out of src/ into src/daemon/ moved
+ * __dirname one level deeper and this resolved to src/bin/vnodes.js, which does
+ * not exist. Every unit test passed. It was caught by starting a daemon.
+ */
+test('the binary startDetached spawns is a file that exists', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'daemon', 'lifecycle.js'), 'utf8');
+  const m = /const REPO = path\.join\(__dirname([^)]*)\)/.exec(src);
+  assert.ok(m, 'startDetached no longer resolves the repo root through a REPO constant');
+  const ups = (m[1].match(/'\.\.'/g) || []).length;
+  const repo = path.join(__dirname, '..', 'src', 'daemon', ...Array(ups).fill('..'));
+  assert.ok(fs.existsSync(path.join(repo, 'bin', 'vnodes.js')),
+    `startDetached would spawn ${path.join(repo, 'bin', 'vnodes.js')}, which does not exist`);
+});
