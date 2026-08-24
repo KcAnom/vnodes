@@ -49,4 +49,19 @@ function setupWorkspace(projectRoot, def) {
   return { workspace: wsPath, parent_pointers: written };
 }
 
-module.exports = { loadWorkspace, setupWorkspace };
+function forgetWorkspace(projectRoot) {
+  const ws = loadWorkspace(projectRoot);
+  if (!ws) return { ok: false, error: 'no workspace defined' };
+  const removed = [];
+  for (const r of ws.repos) {
+    const abs = path.resolve(ws.baseDir, r.path);
+    if (abs === ws.primaryRoot) continue;
+    const ptr = path.join(abs, '.vnodes', 'parent_workspace.json');
+    if (fs.existsSync(ptr)) { fs.unlinkSync(ptr); removed.push(ptr); }
+  }
+  const primary = path.join(ws.primaryRoot, '.vnodes', 'workspace.json');
+  if (fs.existsSync(primary)) { fs.unlinkSync(primary); removed.push(primary); }
+  return { ok: true, name: ws.name, removed, note: 'indexes were not touched' };
+}
+
+module.exports = { loadWorkspace, setupWorkspace, forgetWorkspace };

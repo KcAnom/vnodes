@@ -9,8 +9,8 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { loadConfig, findProjectRoot, engineDirPath } = require('./config');
-const { resolveKb, listKbs, ensureEntry, registryCfg, forget } = require('./registry');
-const { captureObservation, deleteObservation } = require('./memory');
+const { resolveKb, listKbs, ensureEntry, registryCfg, forget, hide, show } = require('./registry');
+const { captureObservation, deleteObservation, clearActivity } = require('./memory');
 const { TOOL_DEFS, callTool } = require('./tools');
 const { indexStatus } = require('./indexer');
 const { loadWorkspace } = require('./workspace');
@@ -193,6 +193,27 @@ function serve(projectRoot) {
     // Registry forget — the one write the operator UI is allowed. It removes
     // registry rows (the picker). It never indexes, never opens a project
     // sqlite, never runs rm -rf on .vnodes. Same contract as `vnodes kb forget`.
+    if (req.method === 'POST' && (url.pathname === '/ui/api/kbs/hide' || url.pathname === '/ui/api/kbs/show')) {
+      const denial = uiDenial(req, boundPort());
+      if (denial) return send(403, { error: `refused: ${denial}` });
+      if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
+        return send(403, { error: 'refused: application/json required' });
+      }
+      const act = url.pathname.endsWith('/hide') ? hide : show;
+      const chunks = [];
+      req.on('data', c => chunks.push(c));
+      req.on('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+          if (!ids.length) return send(400, { error: 'ids required' });
+          const results = ids.map(id => act(String(id)));
+          return send(200, { ok: results.every(r => r.ok), results });
+        } catch (e) { return send(400, { error: e.message }); }
+      });
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/ui/api/kbs/forget') {
       const denial = uiDenial(req, boundPort());
       if (denial) {
@@ -233,6 +254,16 @@ function serve(projectRoot) {
         }
       });
       return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/ui/api/notes/clear-activity') {
+      const denial = uiDenial(req, boundPort());
+      if (denial) return send(403, { error: `refused: ${denial}` });
+      const qn = Object.fromEntries(url.searchParams);
+      const resolved = resolveKb(qn.kb, projectRoot);
+      if (!resolved.ok) return send(resolved.code === 'no_default' ? 400 : 404, { ...resolved });
+      const out = clearActivity(engineDirPath(resolved.root));
+      return send(200, { kb: resolved.id, ...out });
     }
 
     if (req.method === 'POST' && url.pathname === '/ui/api/notes/forget') {
@@ -352,7 +383,7 @@ function serve(projectRoot) {
       if (url.pathname === '/ui/api/kbs') {
         // The scan is reported with the list because a short list and a scan
         // that gave up look identical otherwise, and one of them is a bug.
-        return send(200, { ...listKbs({ launchRoot: projectRoot, cfg }), discovery: lastDiscovery });
+        return send(200, { ...listKbs({ launchRoot: projectRoot, cfg, includeHidden: q.include_hidden === '1' }), discovery: lastDiscovery });
       }
 
       if (scoped) {

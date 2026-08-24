@@ -25,7 +25,7 @@ import { Input } from '../shell/Input'
 import { Stat } from '../shell/Stat'
 import { Link, navigate, useRoute } from '../shell/route'
 import { useKb } from '../shell/kb'
-import { fetchNotes, saveNote, forgetNote } from '../shell/api'
+import { fetchNotes, saveNote, forgetNote, clearActivity } from '../shell/api'
 import type { Memory, Notes } from '../shell/api'
 import { relativeTime } from '../shell/time'
 import { cn } from '../kit/utils'
@@ -242,6 +242,21 @@ export function NotesView() {
                 </span>
               </summary>
               <div className="border-t border-border px-1 py-1">
+                <div className="flex justify-end px-2 py-1">
+                  <button
+                    type="button"
+                    className="font-mono text-[10px] text-muted-foreground hover:text-accent"
+                    onClick={async () => {
+                      if (!window.confirm('Delete the tool-call log? Findings are kept.')) return
+                      await clearActivity()
+                      fetchNotes(q)
+                        .then(setPayload)
+                        .catch((cause: Error) => setError(cause.message))
+                    }}
+                  >
+                    clear log
+                  </button>
+                </div>
                 <List rows={activity} />
               </div>
             </details>

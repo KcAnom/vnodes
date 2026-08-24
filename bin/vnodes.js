@@ -54,8 +54,8 @@ usage: vnodes <command> [args] [--flags]
   skeleton <file>             signatures-only view (--detail minimal|standard|detailed)
   impact <file-or-symbol>     who depends on this (--depth N)
   flow <from> <to>            dependency path between two files/symbols
-  memory [recent|search <q>|save <text> [--file f] [--symbol s]|forget <id>]
-  workspace [setup --name N --repos alias=path,...]
+  memory [recent|search <q>|save <text> [--file f] [--symbol s]|forget <id>|clear]
+  workspace [setup --name N --repos alias=path,... | forget]
   kb [list|discover [path...]|register [path]|forget <id>|hide <id>|show <id>]
                               the knowledge-base registry: every project this machine has indexed.
                               a project is registered by INDEXING it; discover finds ones already on
@@ -215,11 +215,17 @@ project: resolved upward from cwd (--project <path> to override)`);
       if (sub === 'search') out(callTool(projectRoot, 'search_memory', { query: args.join(' ') }, 'cli'));
       else if (sub === 'save') out(callTool(projectRoot, 'save_observation', { summary: args.join(' '), file: flags.file, symbol: flags.symbol }, 'cli'));
       else if (sub === 'forget') out(callTool(projectRoot, 'forget_observation', { id: Number(args[0]) }, 'cli'));
+      else if (sub === 'clear') out(callTool(projectRoot, 'forget_activity', {}, 'cli'));
       else out(callTool(projectRoot, 'get_session_context', { limit: flags.limit ? Number(flags.limit) : 20 }, 'cli'));
       break;
     }
     case 'workspace': {
       const sub = args.shift();
+      if (sub === 'forget') {
+        const { forgetWorkspace } = require('../src/workspace');
+        out(forgetWorkspace(projectRoot));
+        break;
+      }
       if (sub === 'setup') {
         const { callTool } = require('../src/tools');
         const repos = String(flags.repos || '').split(',').filter(Boolean).map(pair => {

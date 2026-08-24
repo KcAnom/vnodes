@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { callTool, callToolReadOnly, ensureIndexed, knowledgeBaseGate, TOOL_DEFS } = require('../src/tools');
+
 const { loadConfig } = require('../src/config');
 const { instructionText } = require('../src/agents');
 
@@ -128,5 +129,8 @@ test('every agent is told the tool exists', () => {
   // generated from this catalog, so a tool added here reaches every wired agent
   // without a per-agent edit. That is the whole reason it is a tool.
   assert.ok(TOOL_DEFS.some(d => d.name === 'create_knowledge_base'));
+  for (const name of ['forget_knowledge_base', 'hide_knowledge_base', 'show_knowledge_base', 'forget_workspace', 'forget_activity']) {
+    assert.ok(TOOL_DEFS.some(d => d.name === name), `catalog missing ${name}`);
+  }
   assert.match(instructionText('/tmp/example-project'), /create_knowledge_base/);
 });

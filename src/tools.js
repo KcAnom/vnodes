@@ -11,10 +11,10 @@ const { runIndex, indexStatus } = require('./indexer');
 const { buildCapsule } = require('./capsule');
 const { buildSkeleton } = require('./skeleton');
 const { impactGraph, logicFlow } = require('./graph');
-const { captureObservation, deleteObservation, searchMemory, sessionContext } = require('./memory');
-const { setupWorkspace, loadWorkspace } = require('./workspace');
+const { captureObservation, deleteObservation, clearActivity, searchMemory, sessionContext } = require('./memory');
+const { setupWorkspace, loadWorkspace, forgetWorkspace } = require('./workspace');
 const { openStore } = require('./store');
-const { idForPath } = require('./registry');
+const { idForPath, hide, show, forget } = require('./registry');
 
 const TOOL_DEFS = [
   { name: 'run_pipeline', description: 'One-call task orientation: intent preset → graph traversal → context capsule (pivot files in full, supporting skeletons, relevant memories with rationale), fitted to the token budget. Presets: auto (default), explore, debug (auto-includes tests), modify, refactor.',
@@ -39,8 +39,18 @@ const TOOL_DEFS = [
     inputSchema: { type: 'object', properties: {} } },
   { name: 'create_knowledge_base', description: 'Make this directory (or `path`) a vnodes knowledge base and index it. This is how a knowledge base is created — every other tool refuses a directory that is not one yet, and points here. Creates the directory if it does not exist, so an agent in an empty terminal can name a new folder and get a knowledge base about it in one call. Safe to call twice: an existing knowledge base is re-indexed, not duplicated.',
     inputSchema: { type: 'object', properties: { path: { type: 'string', description: 'absolute, or relative to the current project root; defaults to the current project root' } } } },
+  { name: 'forget_knowledge_base', description: 'Remove a knowledge base from the machine registry by id. Does not delete the project or its .vnodes index.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string', description: '16-hex registry id' } }, required: ['id'] } },
+  { name: 'hide_knowledge_base', description: 'Hide a knowledge base from the picker without forgetting it.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
+  { name: 'show_knowledge_base', description: 'Unhide a knowledge base so it appears in the picker again.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'workspace_setup', description: 'Define a multi-repo workspace ({name|workspace_id, repos:[{alias,path}]}) and write parent pointers into secondary repos.',
     inputSchema: { type: 'object', properties: { name: { type: 'string' }, workspace_id: { type: 'string' }, repos: { type: 'array', items: { type: 'object', properties: { alias: { type: 'string' }, path: { type: 'string' } }, required: ['alias', 'path'] } } }, required: ['repos'] } },
+  { name: 'forget_workspace', description: 'Remove workspace.json and parent pointers. Does not delete indexes.',
+    inputSchema: { type: 'object', properties: {} } },
+  { name: 'forget_activity', description: 'Delete auto-captured tool-call rows from memory. Manual findings are kept.',
+    inputSchema: { type: 'object', properties: {} } },
 ];
 
 /**
@@ -122,7 +132,9 @@ function ensureIndexed(projectRoot, cfg) {
  * for: it is never reached by a caller that was merely opened somewhere, only
  * by one that asked for a knowledge base by name.
  */
-const GATE_EXEMPT_TOOLS = new Set(['create_knowledge_base']);
+const GATE_EXEMPT_TOOLS = new Set([
+  'create_knowledge_base', 'forget_knowledge_base', 'hide_knowledge_base', 'show_knowledge_base',
+]);
 
 /**
  * Make a directory a knowledge base, and index it.
@@ -198,6 +210,9 @@ const READ_ONLY_TOOLS = new Set([
 function dispatch(projectRoot, name, args, session) {
   // Before engineDir on purpose — see createKnowledgeBase.
   if (name === 'create_knowledge_base') return createKnowledgeBase(projectRoot, args, session);
+  if (name === 'forget_knowledge_base') return forget(args.id);
+  if (name === 'hide_knowledge_base') return hide(args.id);
+  if (name === 'show_knowledge_base') return show(args.id);
   const cfg = loadConfig(projectRoot);
   const engDir = engineDir(projectRoot);
   let result;
@@ -248,6 +263,12 @@ function dispatch(projectRoot, name, args, session) {
       result = setupWorkspace(projectRoot, def);
       break;
     }
+    case 'forget_workspace':
+      result = forgetWorkspace(projectRoot);
+      break;
+    case 'forget_activity':
+      result = clearActivity(engDir);
+      break;
     default:
       throw new Error(`unknown tool: ${name}`);
   }

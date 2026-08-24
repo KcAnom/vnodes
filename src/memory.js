@@ -157,4 +157,11 @@ function sessionContext(engDir, { session = null, limit = 20, readOnly = false }
   }));
 }
 
-module.exports = { captureObservation, deleteObservation, searchMemory, sessionContext, refreshStaleness };
+function clearActivity(engDir) {
+  const db = openMemory(engDir);
+  const info = db.prepare("DELETE FROM observations WHERE kind != 'manual'").run();
+  db.close();
+  return { ok: true, deleted: Number(info.changes || 0) };
+}
+
+module.exports = { captureObservation, deleteObservation, clearActivity, searchMemory, sessionContext, refreshStaleness };

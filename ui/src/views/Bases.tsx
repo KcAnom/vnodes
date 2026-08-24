@@ -34,7 +34,7 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDownUp, Home, Library, Trash2 } from 'lucide-react'
 import type { KbDiscovery, KbRow } from '../shell/api'
-import { forgetKbs } from '../shell/api'
+import { forgetKbs, hideKbs, showKbs, fetchKbs } from '../shell/api'
 import { Centered } from '../shell/Centered'
 import { Copyable } from '../shell/Copyable'
 import { Link } from '../shell/route'
@@ -98,6 +98,7 @@ function langs(row: KbRow): string {
 export function Bases() {
   const { kbs, kbsError, reloadKbs } = useFeed()
   const [sort, setSort] = useState<Sort>('recent')
+  const [hiddenRows, setHiddenRows] = useState<KbRow[] | null>(null)
 
   const rows = useMemo(() => {
     if (!kbs) return []
@@ -165,6 +166,30 @@ export function Bases() {
         ))}
       </ul>
 
+      {hiddenRows && hiddenRows.length > 0 && (
+        <section>
+          <h2 className="mb-2 text-[11px] tracking-wide text-muted-foreground uppercase">hidden</h2>
+          <ul className="overflow-hidden rounded border border-border">
+            {hiddenRows.map((row) => (
+              <li key={row.id} className="flex items-center gap-2 border-b border-border px-4 py-2 last:border-b-0">
+                <span className="min-w-0 flex-1 truncate text-[13px]">{row.name}</span>
+                <button
+                  type="button"
+                  className="font-mono text-[10px] text-muted-foreground hover:text-accent"
+                  onClick={async () => {
+                    await showKbs([row.id])
+                    setHiddenRows(hiddenRows.filter((r) => r.id !== row.id))
+                    reloadKbs()
+                  }}
+                >
+                  show
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <Footer
         hidden={kbs.hidden_count}
         shown={kbs.shown ?? rows.length}
@@ -173,6 +198,10 @@ export function Bases() {
         dir={kbs.registry_dir}
         notes={kbs.notes}
         discovery={kbs.discovery}
+        onRevealHidden={async () => {
+          const list = await fetchKbs(true)
+          setHiddenRows(list.kbs.filter((row) => row.hidden))
+        }}
       />
     </div>
   )
@@ -311,7 +340,20 @@ function Row({ row, onForgotten }: { row: KbRow; onForgotten: () => void }) {
             <div title={row.path}>{body}</div>
           )}
         </div>
-        <div className="flex shrink-0 items-center pr-3">
+        <div className="flex shrink-0 items-center gap-1 pr-3">
+          <button
+            type="button"
+            title="hide from this list (vnodes kb show puts it back)"
+            onClick={async (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              await hideKbs([row.id])
+              onForgotten()
+            }}
+            className="rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+          >
+            hide
+          </button>
           <ForgetButton
             ids={[row.id]}
             label="remove"
@@ -444,6 +486,7 @@ function Footer({
   dir,
   notes,
   discovery,
+  onRevealHidden,
 }: {
   hidden: number
   shown: number
@@ -452,6 +495,7 @@ function Footer({
   dir: string
   notes?: string[]
   discovery?: KbDiscovery | null
+  onRevealHidden?: () => void
 }) {
   return (
     <div className="flex flex-col gap-1 text-[11px] text-muted-foreground">
@@ -459,9 +503,16 @@ function Footer({
           command that brings it back, because a list that silently shortened
           itself would be the exact failure this project refuses everywhere. */}
       <p>
-        {hidden > 0
-          ? `${count(hidden)} hidden knowledge base${hidden === 1 ? '' : 's'} not listed above — vnodes kb show <id> puts one back.`
-          : 'nothing is hidden — every registry entry is listed above.'}
+        {hidden > 0 ? (
+          <>
+            {count(hidden)} hidden knowledge base{hidden === 1 ? '' : 's'} not listed above.{' '}
+            <button type="button" className="text-accent hover:underline" onClick={onRevealHidden}>
+              show hidden
+            </button>
+          </>
+        ) : (
+          'nothing is hidden — every registry entry is listed above.'
+        )}
       </p>
       {capped && (
         <p className="text-accent">

@@ -349,7 +349,28 @@ export const fetchStatus = () => getJson<Status>('/status', { scoped: false })
 export const fetchHealth = () => getJson<Health>('/ui/api/health')
 export const fetchComposition = () => getJson<Composition>('/ui/api/composition')
 export const fetchTools = () => getJson<Tools>('/tools', { scoped: false })
-export const fetchKbs = () => getJson<KbList>('/ui/api/kbs', { scoped: false })
+export const fetchKbs = (includeHidden = false) =>
+  getJson<KbList>(includeHidden ? '/ui/api/kbs?include_hidden=1' : '/ui/api/kbs', { scoped: false })
+
+async function postKb(path: string, ids: string[]): Promise<{ ok?: boolean; forgotten?: string[]; results?: unknown }> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  })
+  if (!res.ok) throw new Error(`${path} — ${res.status}`)
+  return res.json()
+}
+
+export const hideKbs = (ids: string[]) => postKb('/ui/api/kbs/hide', ids)
+export const showKbs = (ids: string[]) => postKb('/ui/api/kbs/show', ids)
+
+export async function clearActivity(): Promise<{ deleted: number }> {
+  const url = withKb('/ui/api/notes/clear-activity')
+  const res = await fetch(url, { method: 'POST', headers: { accept: 'application/json' } })
+  if (!res.ok) throw new Error(`${url} — ${res.status}`)
+  return res.json()
+}
 
 /**
  * Remove registry rows. Same as `vnodes kb forget`: the picker shortens, the

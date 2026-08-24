@@ -106,3 +106,12 @@ test('a finding can be deleted; a task record cannot', () => {
   assert.equal(blocked.ok, false);
   assert.match(blocked.error, /only findings/);
 });
+
+test('clearActivity deletes auto rows and keeps findings', () => {
+  const { clearActivity } = require('../src/memory');
+  const engDir = store();
+  const out = clearActivity(engDir);
+  assert.ok(out.deleted >= 1);
+  const log = sessionContext(engDir, { limit: 20, readOnly: true });
+  assert.ok(log.every(r => r.kind === 'manual'));
+});

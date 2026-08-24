@@ -488,6 +488,43 @@ test('POST /ui/api/kbs/forget removes registry rows and leaves the index', async
   }
 });
 
+test('POST /ui/api/kbs/hide and show toggle picker membership', async () => {
+  const p = fixtureProject('hide-ui');
+  const port = await freePort();
+  process.env.VNODES_PORT = String(port);
+  const { serve } = require('../src/daemon');
+  const handle = serve(null);
+  const base = `http://127.0.0.1:${port}`;
+  const headers = {
+    origin: `http://127.0.0.1:${port}`,
+    host: `127.0.0.1:${port}`,
+    'content-type': 'application/json',
+  };
+  try {
+    for (let i = 0; i < 50; i++) {
+      try { if ((await fetch(base + '/status')).ok) break; } catch {}
+      await new Promise(r => setTimeout(r, 20));
+    }
+    const hid = await fetch(`${base}/ui/api/kbs/hide`, {
+      method: 'POST', headers, body: JSON.stringify({ id: p.id }),
+    });
+    assert.strictEqual(hid.status, 200);
+    const listed = await fetch(`${base}/ui/api/kbs`).then(r => r.json());
+    assert.ok(!listed.kbs.some(k => k.id === p.id));
+    const all = await fetch(`${base}/ui/api/kbs?include_hidden=1`).then(r => r.json());
+    assert.ok(all.kbs.some(k => k.id === p.id && k.hidden));
+    const shown = await fetch(`${base}/ui/api/kbs/show`, {
+      method: 'POST', headers, body: JSON.stringify({ ids: [p.id] }),
+    });
+    assert.strictEqual(shown.status, 200);
+    const back = await fetch(`${base}/ui/api/kbs`).then(r => r.json());
+    assert.ok(back.kbs.some(k => k.id === p.id));
+  } finally {
+    handle.close();
+    delete process.env.VNODES_PORT;
+  }
+});
+
 test('POST /ui/api/notes writes a finding without /rpc', async () => {
   const proj = fixtureProject('ui-note');
   const port = await freePort();

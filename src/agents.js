@@ -66,6 +66,11 @@ const TOOL_HINTS = {
   get_skeleton: 'signatures-only view instead of reading a whole file.',
   save_observation: 'record a durable insight (link a file for staleness tracking).',
   forget_observation: 'delete a manual finding by id when it is wrong or no longer true.',
+  forget_knowledge_base: 'remove a knowledge base from the registry by id (does not delete .vnodes).',
+  hide_knowledge_base: 'hide a knowledge base from the picker.',
+  show_knowledge_base: 'unhide a knowledge base.',
+  forget_workspace: 'remove workspace.json and parent pointers; indexes stay.',
+  forget_activity: 'delete auto-captured tool-call rows; manual findings stay.',
   search_memory: 'recall findings from previous sessions.',
   index_status: 'index health when a result looks stale or wrong.',
 };
