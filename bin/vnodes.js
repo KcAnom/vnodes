@@ -49,6 +49,8 @@ usage: vnodes <command> [args] [--flags]
                               $HOME is refused unless --force is passed
   reindex                     force full re-index (stops daemon, rebuilds store, restarts daemon)
   status                      index + daemon state
+  check                       fail if .vnodes/manifest.json does not match the tree (CI)
+  hook [install|pre-commit]   install a git pre-commit hook, or run it (reindex + stage manifest)
   pipeline <task...>          one-call context capsule (--preset auto|explore|debug|modify|refactor, --max-tokens N, --repos a,b, --json)
   capsule <task...>           alias of pipeline
   skeleton <file>             signatures-only view (--detail minimal|standard|detailed)
@@ -115,6 +117,27 @@ project: resolved upward from cwd (--project <path> to override)`);
       const { indexStatus } = require('../src/indexer');
       const { daemonState } = require('../src/daemon');
       out({ project: projectRoot, index: indexStatus(projectRoot), daemon: daemonState(projectRoot) });
+      break;
+    }
+    case 'check': {
+      const { checkIndex } = require('../src/freshness');
+      const r = checkIndex(projectRoot);
+      out(r);
+      if (!r.ok) process.exitCode = 1;
+      break;
+    }
+    case 'hook': {
+      const { installHook, runPreCommit } = require('../src/freshness');
+      const sub = args.shift() || 'install';
+      if (sub === 'install') out(installHook(projectRoot));
+      else if (sub === 'pre-commit') {
+        const r = runPreCommit(projectRoot);
+        out(r);
+        if (!r.ok) process.exitCode = 1;
+      } else {
+        out('vnodes hook: use install | pre-commit');
+        process.exitCode = 1;
+      }
       break;
     }
     case 'mcp': // stdio MCP server — the default agent transport

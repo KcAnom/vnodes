@@ -85,6 +85,11 @@ test('the read-only dispatch refuses the write tools and records nothing', () =>
   // relevance window with rows describing its own polling.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-readonly-'));
   fs.writeFileSync(path.join(root, 'a.js'), 'export function a() { return 1; }\n');
+  // Index first: the first run writes a foundation finding, which is a real
+  // write on the agent path. This assertion is that a later read does not.
+  const { runIndex } = require('../src/indexer');
+  const { loadConfig } = require('../src/config');
+  runIndex(root, loadConfig(root));
   const engDir = engineDir(root);
   const count = () => {
     const db = openMemory(engDir);

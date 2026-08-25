@@ -199,4 +199,40 @@ function clearActivity(engDir) {
   return { ok: true, deleted: Number(info.changes || 0) };
 }
 
-module.exports = { captureObservation, deleteObservation, updateObservation, clearActivity, searchMemory, sessionContext, refreshStaleness };
+const FOUNDATION_PREFIX = '[vnodes:foundation]';
+
+function hasFoundationSeed(engDir) {
+  try {
+    const db = openMemoryReadOnly(engDir);
+    if (!db) return false;
+    try {
+      const row = db.prepare('SELECT id FROM observations WHERE kind = ? AND summary LIKE ? LIMIT 1')
+        .get('manual', `${FOUNDATION_PREFIX}%`);
+      return !!row;
+    } finally { db.close(); }
+  } catch { return false; }
+}
+
+function foundationSummary({ name, files, nodes, edges, langs = [], hubs = [] }) {
+  const langBit = langs.length
+    ? ` Languages: ${langs.map(l => l).join(', ')}.`
+    : '';
+  const hubBit = hubs.length ? ` Hubs: ${hubs.join(', ')}.` : '';
+  const body = `${FOUNDATION_PREFIX} Established vnodes on ${name}: ${files} files, ${nodes} symbols, ${edges} edges.${langBit}${hubBit} First durable finding from the index — later sessions should add findings, not replace this one. Call run_pipeline at the start of each task; get_impact_graph before changing a file.`;
+  return body.slice(0, 800);
+}
+
+function seedFoundation(engDir, snapshot) {
+  if (hasFoundationSeed(engDir)) return { seeded: false, reason: 'already seeded' };
+  const summary = foundationSummary(snapshot);
+  captureObservation(engDir, {
+    session: 'seed',
+    tool: 'save_observation',
+    kind: 'manual',
+    summary,
+    file: snapshot.pivot || null,
+  });
+  return { seeded: true, summary };
+}
+
+module.exports = { captureObservation, deleteObservation, updateObservation, clearActivity, searchMemory, sessionContext, refreshStaleness, seedFoundation, hasFoundationSeed, FOUNDATION_PREFIX };

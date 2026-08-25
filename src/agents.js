@@ -62,7 +62,8 @@ function detectAgents() {
 // catalog it describes.
 const TOOL_HINTS = {
   run_pipeline: 'ONE call per task for orientation: pivot files in full, supporting skeletons, and prior-session memories with rationale, inside a token budget. Call it first, once, per task.',
-  get_impact_graph: 'who depends on a file/symbol before you change it.',
+  create_knowledge_base: 'Make this directory a knowledge base and index it. First call seeds a durable foundation finding from the graph.',
+  get_impact_graph: 'who depends on a file/symbol before you change it. Call this before editing a file.',
   get_skeleton: 'signatures-only view instead of reading a whole file.',
   save_observation: 'record a durable insight (link a file for staleness tracking).',
   forget_observation: 'delete a manual finding by id when it is wrong or no longer true.',
@@ -103,7 +104,14 @@ function instructionText(projectRoot) {
 ## vnodes context engine
 
 This project is indexed by vnodes (local code-graph context engine). Prefer its
-MCP tools over raw file exploration:
+MCP tools over raw file exploration.
+
+Every task:
+1. If there is no knowledge base yet, call \`create_knowledge_base\` — that indexes the tree and seeds the first durable finding.
+2. Call \`run_pipeline\` once at the start with the task.
+3. Before changing a file or symbol, call \`get_impact_graph\` on it.
+4. After a change you are keeping, \`save_observation\` what you learned (link the file).
+5. Keep the index current with kept changes: \`vnodes index\`. \`vnodes check\` fails when \`.vnodes/manifest.json\` does not match the tree (older than HEAD in practice). Install \`vnodes hook install\` so pre-commit reindexes and stages the manifest, or run \`vnodes check\` in CI.
 
 ${toolCatalogLines()}
 

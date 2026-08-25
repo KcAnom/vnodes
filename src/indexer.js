@@ -11,6 +11,7 @@ const { parseFile, langOf } = require('./parser');
 const { openStore, openStoreReadOnly } = require('./store');
 const { engineDir } = require('./config');
 const { loadWorkspace } = require('./workspace');
+const { headSha } = require('./git');
 
 function sha1(buf) { return crypto.createHash('sha1').update(buf).digest('hex'); }
 
@@ -28,6 +29,53 @@ function walk(root, isIgnored, out = [], rel = '') {
     }
   }
   return out;
+}
+
+// The files an index run would hash, using the same ignore / secret / size /
+// language gates as indexRepo. `vnodes check` reuses this so CI cannot drift
+// from what the indexer actually stores in manifest.json.
+function eligibleSourceFiles(repoRoot, cfg) {
+  const isIgnored = buildIgnore(repoRoot);
+  const filterSecrets = cfg.filter_secrets !== false;
+  const maxBytes = cfg.index.max_file_size_kb * 1024;
+  const files = walk(repoRoot, isIgnored);
+  const fileSet = new Set(files);
+  const eligible = [];
+  let skippedSecret = 0, skippedSize = 0;
+  for (const rel of files) {
+    if (filterSecrets && isSecretFile(rel)) { skippedSecret++; continue; }
+    if (!langOf(rel)) continue;
+    const abs = path.join(repoRoot, rel);
+    let stat;
+    try { stat = fs.statSync(abs); } catch { continue; }
+    if (stat.size > maxBytes) { skippedSize++; continue; }
+    eligible.push({ rel, abs, size: stat.size });
+  }
+  return { files, fileSet, eligible, skippedSecret, skippedSize };
+}
+
+function manifestForRepo(repoRoot, alias, cfg) {
+  const { eligible } = eligibleSourceFiles(repoRoot, cfg);
+  const manifest = {};
+  for (const { rel, abs } of eligible) {
+    const key = alias ? `${alias}/${rel}` : rel;
+    manifest[key] = sha1(fs.readFileSync(abs));
+  }
+  return manifest;
+}
+
+function expectedManifest(projectRoot, cfg) {
+  const ws = loadWorkspace(projectRoot);
+  if (ws) {
+    const manifest = {};
+    for (const { alias, path: repoPath } of ws.repos) {
+      const abs = path.resolve(ws.baseDir, repoPath);
+      if (!fs.existsSync(abs)) continue;
+      Object.assign(manifest, manifestForRepo(abs, alias, cfg));
+    }
+    return manifest;
+  }
+  return manifestForRepo(projectRoot, '', cfg);
 }
 
 const CAND_SUFFIXES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.rb',
@@ -414,17 +462,13 @@ function resolveImport(fromFile, spec, fileSet, ctx = {}) {
 
 // Index one repo tree into the store under a repo alias ('' for single-repo).
 function indexRepo(db, repoRoot, alias, cfg, log) {
-  const isIgnored = buildIgnore(repoRoot);
-  const filterSecrets = cfg.filter_secrets !== false;
-  const maxBytes = cfg.index.max_file_size_kb * 1024;
-  const files = walk(repoRoot, isIgnored);
-  const fileSet = new Set(files);
+  const { files, fileSet, eligible, skippedSecret, skippedSize } = eligibleSourceFiles(repoRoot, cfg);
   const aliases = loadAliases(repoRoot);
 
   const prev = new Map(
     db.prepare('SELECT path, hash FROM files WHERE repo = ?').all(alias).map(r => [r.path, r.hash]));
   const manifest = {};
-  let added = 0, updated = 0, skippedSecret = 0, skippedSize = 0, unchanged = 0;
+  let added = 0, updated = 0, unchanged = 0;
 
   const insFile = db.prepare('INSERT OR REPLACE INTO files (path, repo, hash, size, lang, indexed_at) VALUES (?,?,?,?,?,?)');
   const delNodes = db.prepare('DELETE FROM nodes WHERE file = ? AND repo = ?');
@@ -434,13 +478,7 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
   const delImports = db.prepare('DELETE FROM imports WHERE file = ?');
   const insImport = db.prepare('INSERT INTO imports (file, repo, spec) VALUES (?,?,?)');
 
-  for (const rel of files) {
-    if (filterSecrets && isSecretFile(rel)) { skippedSecret++; continue; }
-    if (!langOf(rel)) continue;
-    const abs = path.join(repoRoot, rel);
-    let stat;
-    try { stat = fs.statSync(abs); } catch { continue; }
-    if (stat.size > maxBytes) { skippedSize++; continue; }
+  for (const { rel, abs, size } of eligible) {
     const buf = fs.readFileSync(abs);
     const hash = sha1(buf);
     const key = alias ? `${alias}/${rel}` : rel;
@@ -450,7 +488,7 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
     if (!parsed) continue;
     prev.has(key) ? updated++ : added++;
     prev.delete(key);
-    insFile.run(key, alias, hash, stat.size, parsed.lang, Date.now());
+    insFile.run(key, alias, hash, size, parsed.lang, Date.now());
     delNodes.run(key, alias);
     for (const n of parsed.nodes) insNode.run(key, alias, n.name, n.kind, n.line, n.signature || '');
     // Store the specifiers, not the edges. Parse output depends only on this
@@ -573,11 +611,22 @@ function runIndex(projectRoot, cfg, log) {
   setMeta.run('last_index', String(Date.now()));
   setMeta.run('last_index_ms', String(Date.now() - t0));
   setMeta.run('last_index_first_run', firstRun ? '1' : '0');
+  const gitHead = headSha(projectRoot);
+  setMeta.run('last_index_git_head', gitHead || '');
   const nodeCount = db.prepare('SELECT COUNT(*) c FROM nodes').get().c;
   const edgeCount = db.prepare('SELECT COUNT(*) c FROM edges').get().c;
   const fileCount = db.prepare('SELECT COUNT(*) c FROM files').get().c;
   const langs = db.prepare('SELECT lang, COUNT(*) c FROM files GROUP BY lang ORDER BY c DESC LIMIT 3').all().map(r => r.lang || 'unknown');
   const repos = db.prepare('SELECT DISTINCT repo FROM files').all().map(r => r.repo || '(root)');
+  const hubs = db.prepare(`
+    SELECT path, (
+      (SELECT COUNT(*) FROM edges WHERE src_file = files.path) +
+      (SELECT COUNT(*) FROM edges WHERE dst_file = files.path)
+    ) AS deg
+    FROM files
+    ORDER BY deg DESC, path ASC
+    LIMIT 5
+  `).all().filter(r => r.deg > 0).map(r => r.path);
   // W1: registration is a side effect of INDEXING, never of merely reading. A
   // finished run is the only moment at which every field of the snapshot is
   // both true and already in scope, and the write is throttled so the watcher's
@@ -591,7 +640,29 @@ function runIndex(projectRoot, cfg, log) {
     }, cfg);
   } catch {}
   db.close();
+  // First durable finding: a graph-derived sketch of the tree, written once.
+  // Watcher re-runs skip it because the row already exists. Capsules attach
+  // kind=manual only, so this is what a later session actually sees.
+  try {
+    require('./memory').seedFoundation(engDir, {
+      name: projectName(projectRoot),
+      files: fileCount,
+      nodes: nodeCount,
+      edges: edgeCount,
+      langs,
+      hubs,
+      pivot: hubs[0] || (manifest['README.md'] ? 'README.md' : null),
+    });
+  } catch {}
   return { ms: Date.now() - t0, files: fileCount, nodes: nodeCount, edges: edgeCount, stats };
+}
+
+function projectName(root) {
+  try {
+    const n = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).name;
+    if (n) return String(n);
+  } catch {}
+  return path.basename(root) || root;
 }
 
 // Cross-repo edges: shared-types heuristic (package.json dependency name
@@ -638,7 +709,14 @@ function indexStatus(projectRoot) {
     last_index: Number(db.prepare("SELECT value FROM meta WHERE key = 'last_index'").get()?.value || 0),
     last_index_ms: Number(db.prepare("SELECT value FROM meta WHERE key = 'last_index_ms'").get()?.value || 0),
     last_index_first_run: db.prepare("SELECT value FROM meta WHERE key = 'last_index_first_run'").get()?.value === '1',
+    last_index_git_head: db.prepare("SELECT value FROM meta WHERE key = 'last_index_git_head'").get()?.value || null,
   };
+  if (out.last_index_git_head === '') out.last_index_git_head = null;
+  out.git_head = headSha(projectRoot);
+  out.index_vs_head = !out.git_head ? 'no_git'
+    : !out.last_index_git_head ? 'unrecorded'
+    : out.git_head === out.last_index_git_head ? 'current'
+    : 'behind';
   db.close();
   // What is on disk and deliberately absent, and the rule that made it so.
   // The index is what every agent reads, so an exclusion nobody can see is the
@@ -684,4 +762,4 @@ function indexStatus(projectRoot) {
   return out;
 }
 
-module.exports = { runIndex, indexStatus, sha1 };
+module.exports = { runIndex, indexStatus, sha1, expectedManifest };

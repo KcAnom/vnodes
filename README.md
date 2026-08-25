@@ -39,11 +39,20 @@ toolchain. It still reaches no network — the daemon serves it off disk.
   agents the stdio command.
 - **Session memory** — every tool call auto-captured; observations
   auto-surface with rationale; linked-code changes flag them stale (demoted,
-  warned, never deleted).
+  warned, never deleted). The first index of a tree writes one durable
+  foundation finding from the graph (languages, hubs, counts) so a later
+  session has something to attach before anyone has worked here.
+- **Kept-change freshness** — `vnodes check` fails when `.vnodes/manifest.json`
+  does not match the current tree (the CI-safe stand-in for "index older than
+  HEAD", since `index.db` is gitignored). `vnodes hook install` writes a
+  pre-commit hook that reindexes and stages the manifest so a kept change
+  cannot land stale.
 - **Agent setup** — `vnodes setup` detects installed agents and writes an
   MCP registration plus an instruction block inside markers; hand-written
   content is never touched, and the instruction block is generated from the
-  live tool catalog so it cannot fall behind. `--personal` skips all
+  live tool catalog so it cannot fall behind. The block also tells every
+  agent to orient, take impact before edits, save findings, and keep the
+  index current. `--personal` skips all
   shared-repo writes; `vnodes setup --detect` lists the known agents and which
   of them are installed. Two rules decide the shape of a registration:
   - **Where the config lives decides whether a project root is pinned.** A
@@ -108,9 +117,11 @@ accepts the gap on a machine without Chrome, and still prints what was missed.
 
 ```bash
 cd your-project
-vnodes index          # or just call any tool — indexing is automatic
+vnodes index          # or create_knowledge_base from an agent — seeds a foundation finding
 vnodes pipeline "add rate limiting to the API"
 vnodes setup          # wire your installed agents to the MCP server
+vnodes hook install   # pre-commit reindexes and stages .vnodes/manifest.json
+vnodes check          # CI: fail if the index does not match the tree
 vnodes doctor
 ```
 

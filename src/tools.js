@@ -192,7 +192,7 @@ function createKnowledgeBase(projectRoot, args, session) {
     edges: r.edges,
     ms: r.ms,
     state: st.state,
-    next: 'run_pipeline "<what you are trying to do>" for a context capsule from it',
+    next: 'run_pipeline "<what you are trying to do>" — a foundation finding is already in memory',
   };
 }
 

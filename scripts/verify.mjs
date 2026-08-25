@@ -101,6 +101,11 @@ function findChrome() {
 
 // ------------------------------------------------------------------ stages
 
+await stage('index freshness', () => {
+  const out = run('node', ['bin/vnodes.js', 'check'])
+  return out.status === 0 ? pass('manifest matches the tree') : fail(`vnodes check exited ${out.status}`)
+})
+
 await stage('unit tests', () => {
   // Expanded here rather than by a shell: passing args through `shell: true`
   // concatenates them unescaped, and a path with a space would silently run

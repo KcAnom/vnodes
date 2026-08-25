@@ -72,13 +72,15 @@ test('only rows that carry a finding are written', () => {
   callTool(dir, 'save_observation', { summary: 'a real finding' }, s);
 
   const rows = observations(dir);
-  // create_knowledge_base, run_pipeline, the manual save. Not the three lookups.
-  assert.equal(rows.length, 3, rows.map(r => `${r.tool}:${r.summary}`).join(' | '));
+  // foundation seed, create_knowledge_base, run_pipeline, the manual save.
+  // Not the three lookups.
+  assert.equal(rows.length, 4, rows.map(r => `${r.tool}:${r.summary}`).join(' | '));
   for (const r of rows) {
     assert.ok(!/^\{.*\}$/.test(r.summary.trim()), `argument JSON got in: ${r.tool} :: ${r.summary}`);
   }
+  assert.ok(rows.some(r => r.summary.startsWith('[vnodes:foundation]')), 'lost the foundation seed');
   assert.ok(rows.some(r => r.tool === 'run_pipeline' && /task:/.test(r.summary)), 'lost the task record');
-  assert.ok(rows.some(r => r.kind === 'manual'), 'lost the manual save');
+  assert.ok(rows.some(r => r.kind === 'manual' && r.summary === 'a real finding'), 'lost the manual save');
 });
 
 test('sessionNotice says nothing about a session it has never seen', () => {

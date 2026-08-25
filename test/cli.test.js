@@ -31,6 +31,8 @@ test('help exits 0', () => {
   assert.match(r.stdout, /capsule <task/);
   assert.match(r.stdout, /llm \[status\|install\|enable/);
   assert.match(r.stdout, /bases \(picker/);
+  assert.match(r.stdout, /check/);
+  assert.match(r.stdout, /hook \[install\|pre-commit\]/);
 });
 
 test('bare invocation is help and exits 0', () => {

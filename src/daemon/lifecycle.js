@@ -136,6 +136,14 @@ async function doctor(projectRoot) {
   const manifest = path.join(eng, 'manifest.json');
   add('manifest', fs.existsSync(manifest), fs.existsSync(manifest) ? 'committed manifest present' : 'missing — run: vnodes index');
 
+  try {
+    const { checkIndex } = require('../freshness');
+    const fresh = checkIndex(projectRoot);
+    add('index-freshness', fresh.ok, fresh.reason);
+  } catch (e) {
+    add('index-freshness', false, e.message);
+  }
+
   // Workspace drift: workspace.json repos that don't exist on disk.
   const ws = loadWorkspace(projectRoot);
   if (ws) {
