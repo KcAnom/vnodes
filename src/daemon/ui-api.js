@@ -208,7 +208,7 @@ function composition(engDir, projectRoot) {
  * The read-only data family behind the operator pages.
  *
  * None of these go through callTool. Every callTool invocation inserts an
- * observation (BR-013), so a panel that polls would fill the memory feed agents
+ * observation, so a panel that polls would fill the memory feed agents
  * read with rows summarising its own polling — which is both noise and a lie
  * about what happened in the session. Calling buildCapsule / sessionContext /
  * searchMemory / doctor directly is the pattern src/view/index.js already uses

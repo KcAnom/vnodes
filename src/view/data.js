@@ -1,5 +1,5 @@
 'use strict';
-// Read-only store queries behind the dependency map (M9 map surface).
+// Read-only store queries behind the dependency map.
 //
 // Separate from src/graph.js on purpose: graph.js answers agent tool calls
 // (impact, flow) and its shapes are part of the MCP contract. The map needs a

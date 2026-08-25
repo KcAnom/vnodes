@@ -267,6 +267,33 @@ test('secrets and oversized files are skipped', () => {
 const { excludedSummary } = require('../src/exclusions');
 const { indexStatus } = require('../src/indexer');
 
+test('root output defaults do not hide nested source packages with the same name', () => {
+  const root = fixture({
+    'build/generated.go': 'package generated\n',
+    'dist/generated.ts': 'export const generated = true;\n',
+    'target/generated.rs': 'pub fn generated() {}\n',
+    'internal/build/build.go': 'package build\nfunc Run() {}\n',
+    'src/dist/format.ts': 'export function format() { return "dist"; }\n',
+    'pkg/target/model.rs': 'pub struct Model;\n',
+  });
+  runIndex(root, loadConfig(root));
+  const db = openStore(engineDir(root));
+  const files = new Set(db.prepare('SELECT path FROM files').all().map(r => r.path));
+  db.close();
+
+  assert.ok(!files.has('build/generated.go'), 'root build output was indexed');
+  assert.ok(!files.has('dist/generated.ts'), 'root dist output was indexed');
+  assert.ok(!files.has('target/generated.rs'), 'root target output was indexed');
+  assert.ok(files.has('internal/build/build.go'), 'a legitimate nested build package was hidden');
+  assert.ok(files.has('src/dist/format.ts'), 'a legitimate nested dist package was hidden');
+  assert.ok(files.has('pkg/target/model.rs'), 'a legitimate nested target package was hidden');
+
+  const report = excludedSummary(root);
+  const excluded = new Set(report.subtrees.map(r => r.path));
+  assert.ok(excluded.has('build/'));
+  assert.ok(!excluded.has('internal/build/'));
+});
+
 test('an exclusion names the file that made it', () => {
   const root = fixture({
     'src/kept.ts': 'export function kept() { return 1; }\n',

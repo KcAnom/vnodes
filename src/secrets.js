@@ -1,5 +1,5 @@
 'use strict';
-// Secret filter (BR-004): filename-boundary only, on by default, allowlists
+// Secret filter: filename-boundary only, on by default, allowlists
 // example env files, never drops source files by content.
 const path = require('node:path');
 

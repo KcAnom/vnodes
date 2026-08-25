@@ -1,13 +1,12 @@
 'use strict';
-// M7 LLM layer + owner build directive 3: switchable dual agentic runtime.
+// LLM layer: switchable dual agentic runtime.
 // Runtime A (default): Claude Code CLI, model claude-opus-5.
-// Runtime B: the owner's .pi CLI, model grok-4.5-latest | gpt-5.6-sol.
+// Runtime B: the user's .pi CLI, model grok-4.5-latest | gpt-5.6-sol.
 // The switch is config/env/flag — never a code edit.
 //
-// The "Local LLM" lifecycle (SM-6) is honored as an enable/disable state with
+// The "Local LLM" lifecycle is honored as an enable/disable state with
 // the RAM-floor decline; the actual model brain is the configured runtime CLI.
-// Baseline capsule assembly is rule-based and works with the LLM layer off
-// (BR-022).
+// Baseline capsule assembly is rule-based and works with the LLM layer off.
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,7 +25,7 @@ function llmInstall(projectRoot) {
   const cfg = loadConfig(projectRoot);
   const ramGb = os.totalmem() / 1024 ** 3;
   if (ramGb < cfg.llm.min_ram_gb) {
-    // Below the RAM floor the installer declines; rule-based compressor remains (BR-023).
+    // Below the RAM floor the installer declines; rule-based compressor remains active.
     return { state: 'declined', reason: `machine has ${ramGb.toFixed(1)}GB RAM, floor is ${cfg.llm.min_ram_gb}GB — rule-based compressor remains active` };
   }
   const backend = process.platform === 'darwin' ? 'metal' : 'cpu';
@@ -39,7 +38,7 @@ function llmInstall(projectRoot) {
 function llmDisable(projectRoot) {
   const st = llmState(projectRoot);
   if (st.state !== 'running') return { state: st.state, note: 'not running' };
-  // Disable keeps files on disk for instant re-enable (BR-023 / SM-6).
+  // Disable keeps files on disk for instant re-enable.
   const next = { ...st, state: 'installed-disabled' };
   fs.writeFileSync(llmStatePath(projectRoot), JSON.stringify(next, null, 2));
   return next;

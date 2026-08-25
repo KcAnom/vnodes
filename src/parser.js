@@ -1,5 +1,5 @@
 'use strict';
-// Parse-only symbol extraction (BR-006: no target code is ever executed).
+// Parse-only symbol extraction — no target code is ever executed.
 // Heuristic line-based parsing per language family. Markdown gets a structural
 // heading scan producing Document/Section/Link nodes. Vue/Svelte/Astro yield one
 // component node per file with script blocks parsed as TS at real line numbers.

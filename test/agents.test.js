@@ -1,7 +1,7 @@
 'use strict';
 // Pins the agent-instruction contract: the generated block describes the whole
 // live tool catalog, and generating it never disturbs hand-written prose around
-// the markers (BR-016, BR-018). Before this was generated, the block listed a
+// the markers. Before this was generated, the block listed a
 // hand-picked six of ten tools and silently fell further behind on every
 // addition — these tests are what make that regression impossible.
 const { test } = require('node:test');

@@ -1,11 +1,18 @@
 'use strict';
 // Ignore rules: merge .gitignore, .vnodesignore, .vnodes_ignore (gitignore syntax)
-// plus built-in default excludes (BR-005).
+// plus built-in default excludes.
 const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_EXCLUDES = ['node_modules', '.git', 'target', 'dist', '.next',
   '__pycache__', 'build', 'vendor', 'Pods', 'DerivedData', '.expo', '.vnodes'];
+
+// These names describe conventional root outputs, but they are also ordinary
+// source-package names below a source tree (`internal/build` was the observed
+// failure). Excluding every matching basename silently removes real code.
+// Root outputs remain cheap by default; nested outputs belong in the project's
+// .gitignore/.vnodesignore, which are more authoritative than a name guess.
+const ROOT_ONLY_DEFAULT_EXCLUDES = new Set(['target', 'dist', 'build']);
 
 function globToRegExp(glob) {
   let re = '';
@@ -70,7 +77,9 @@ function nestedIgnoreRules(projectRoot) {
 function buildIgnore(projectRoot) {
   const rules = [
     ...DEFAULT_EXCLUDES.map(d => ({
-      re: new RegExp(`(^|/)${d.replace('.', '\\.')}(/|$)`),
+      re: new RegExp(ROOT_ONLY_DEFAULT_EXCLUDES.has(d)
+        ? `^${globToRegExp(d)}(/|$)`
+        : `(^|/)${globToRegExp(d)}(/|$)`),
       negate: false, dirOnly: false, source: 'built-in', pattern: d,
     })),
     ...parseIgnoreFile(path.join(projectRoot, '.gitignore')),

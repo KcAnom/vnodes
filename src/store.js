@@ -1,12 +1,22 @@
 'use strict';
 // Local graph store: SQLite at .vnodes/index.db — gitignored, never leaves the
-// machine (BR-001). Uses node:sqlite (built into Node 22+): zero native deps.
+// machine. Uses node:sqlite (built into Node 22+): zero native deps.
 const { DatabaseSync } = require('node:sqlite');
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Separate agent processes can finish capsules together. SQLite still permits
+// one writer at a time, so wait for that short local write instead of turning
+// normal contention into SQLITE_BUSY. This is connection-local and bounded.
+const BUSY_TIMEOUT_MS = 5000;
+
+function waitForWriter(db) {
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS};`);
+  return db;
+}
+
 function openStore(engDir) {
-  const db = new DatabaseSync(path.join(engDir, 'index.db'));
+  const db = waitForWriter(new DatabaseSync(path.join(engDir, 'index.db')));
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS files (
@@ -37,7 +47,7 @@ function openStore(engDir) {
 }
 
 function openMemory(engDir) {
-  const db = new DatabaseSync(path.join(engDir, 'memory.db'));
+  const db = waitForWriter(new DatabaseSync(path.join(engDir, 'memory.db')));
   db.exec(`
     PRAGMA journal_mode = WAL;
     CREATE TABLE IF NOT EXISTS observations (
@@ -69,7 +79,7 @@ function openMemory(engDir) {
  */
 function openReadOnly(file) {
   if (!fs.existsSync(file)) return null;
-  return new DatabaseSync(file, { readOnly: true });
+  return waitForWriter(new DatabaseSync(file, { readOnly: true }));
 }
 
 function openStoreReadOnly(engDir) { return openReadOnly(path.join(engDir, 'index.db')); }

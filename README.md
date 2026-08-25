@@ -1,11 +1,8 @@
 # vnodes
 
-Local-first code-graph context engine for AI coding agents. Built as a
-black-box behavioral reimplementation of a private blueprint contract,
-local-only scope: no licensing, no telemetry, zero outbound network calls,
-every feature unconditional. That contract is where the `BR-###` / `ERR-###`
-codes in the source point, and where `config/defaults.json` was snapshotted
-from; it is not distributed with this repo.
+Local-first code-graph context engine for AI coding agents: local-only
+scope, no licensing, no telemetry, zero outbound network calls, every
+feature unconditional.
 
 Zero runtime dependencies — Node 22+ only (`node:sqlite` for the graph store).
 Nothing to install and nothing to build to use it. The one exception is the
@@ -15,17 +12,22 @@ toolchain. It still reaches no network — the daemon serves it off disk.
 
 ## What it does
 
-- **Indexing (M1)** — parses a project into a dependency graph at
+- **Indexing** — parses a project into a dependency graph at
   `.vnodes/index.db` (gitignored). `manifest.json` (committed) holds per-file
   hashes so clones rebuild incrementally. Secret-named files filtered by
   filename boundary (`.env.example` allowlisted); `.gitignore` +
   `.vnodesignore` + `.vnodes_ignore` + default excludes honored; parse-only,
-  files > 512KB skipped. All limits configurable.
-- **Context capsules (M2)** — `vnodes pipeline "<task>"`: intent preset
+  files > 512KB skipped. A root-level `build/`, `dist/`, or `target/` is excluded
+  by default, while the same name below a source tree remains eligible so a
+  package such as `internal/build/` is not mistaken for generated output;
+  explicit ignore files still exclude nested outputs. All limits configurable.
+- **Context capsules** — `vnodes pipeline "<task>"`: intent preset
   (auto/explore/debug/modify/refactor; debug pulls tests), graph-ranked pivot
   files in full + supporter skeletons, fitted to a token budget (default 8000),
-  with relevant memories attached with rationale.
-- **MCP server (M3)** — `vnodes mcp`, MCP over stdio. 19 tools: run_pipeline,
+  with relevant memories attached with rationale. Concurrent capsule
+  completions use bounded SQLite waits and read-only index lookups, so their
+  observation writes serialize instead of failing immediately with `SQLITE_BUSY`.
+- **MCP server** — `vnodes mcp`, MCP over stdio. 19 tools: run_pipeline,
   get_context_capsule, get_impact_graph, search_logic_flow, get_skeleton,
   get_session_context, search_memory, save_observation, forget_observation, update_observation, index_status,
   create_knowledge_base, list_knowledge_bases, forget_knowledge_base, hide_knowledge_base, show_knowledge_base,
@@ -35,10 +37,10 @@ toolchain. It still reaches no network — the daemon serves it off disk.
   and returns a plain JSON result — no JSON-RPC envelope, no `initialize`, no
   `tools/list`. An MCP client that speaks HTTP cannot talk to it; give those
   agents the stdio command.
-- **Session memory (M4)** — every tool call auto-captured; observations
+- **Session memory** — every tool call auto-captured; observations
   auto-surface with rationale; linked-code changes flag them stale (demoted,
   warned, never deleted).
-- **Agent setup (M5)** — `vnodes setup` detects installed agents and writes an
+- **Agent setup** — `vnodes setup` detects installed agents and writes an
   MCP registration plus an instruction block inside markers; hand-written
   content is never touched, and the instruction block is generated from the
   live tool catalog so it cannot fall behind. `--personal` skips all
@@ -53,17 +55,17 @@ toolchain. It still reaches no network — the daemon serves it off disk.
   - **Agents with no MCP client get instructions only** and reach vnodes
     through the CLI or their own bridge. `src/agents.js` is the source of
     truth for which agents are which, and why.
-- **Multi-repo workspaces (M6)** — `.vnodes/workspace.json` (+ auto parent
+- **Multi-repo workspaces** — `.vnodes/workspace.json` (+ auto parent
   pointers in secondary repos); cross-repo shared-type edges; query scoping via
   `repos`, `cross_repo`, `repo`.
-- **LLM layer + dual runtime (M7)** — optional; RAM floor honored; the brain is
+- **LLM layer + dual runtime** — optional; RAM floor honored; the brain is
   the switchable runtime: Claude Code CLI/`claude-opus-5` (default) or the
   `.pi` CLI with `grok-4.5-latest`/`gpt-5.6-sol` — flip via config, env, or flag.
-- **Daemon & diagnostics (M8)** — auto-restart on tool call, self-truncating
+- **Daemon & diagnostics** — auto-restart on tool call, self-truncating
   daemon/index logs, read-only `vnodes doctor` that works with the daemon down.
-- **Status UI (M9)** — `vnodes ui` on the daemon port; `/ui/theme.css` is the
+- **Status UI** — `vnodes ui` on the daemon port; `/ui/theme.css` is the
   design-system insertion seam (deliberately unstyled).
-- **Dependency map (M9)** — `vnodes map [target]` at `/ui/map`: a React Flow
+- **Dependency map** — `vnodes map [target]` at `/ui/map`: a React Flow
   canvas over the indexed files, laid out left-to-right in dependency order.
   Import cycles render red, isolated files dashed, click a node for its
   skeleton and both edge directions. A `--task` scopes it to a real context
@@ -123,27 +125,27 @@ install path — so keep it at user scope in `~/.claude/skills/vnodes/`.
 
 ## Config
 
-`config/defaults.json` (blueprint snapshot values) < `.vnodes/config.json`
+`config/defaults.json` (built-in defaults) < `.vnodes/config.json`
 (per-project) < `VNODES_PORT` / `VNODES_RUNTIME` / `VNODES_PI_MODEL` /
 `VNODES_MAX_TOKENS` / `VNODES_LOG_LEVEL` / `VNODES_PERSONAL_MODE` env vars.
 
-## Deviations from the blueprint
+## Implementation notes
 
 - Parsing is heuristic line/regex-based per language family, not tree-sitter —
-  same observable node/edge contract, lighter fidelity on exotic syntax.
+  lighter fidelity on exotic syntax, but a much smaller surface to reason
+  about.
 - The Local LLM layer does not download an on-device model; its lifecycle
-  states (install/decline/disable/enable) are honored and the model brain is
-  the configured runtime CLI (see directive 3), keeping BR-022's guarantee that
-  everything works with the layer off.
-- macOS binary signing (ERR-004) and marketplace platform packaging (ERR-012)
-  don't apply — this is plain Node source, no binaries.
-- BR-013's "every invocation auto-captured" is narrowed to invocations that
-  carry a finding: `run_pipeline`, the capsule, and `workspace_setup`. The rest
-  auto-captured their own arguments as the summary, so the feed filled with
-  rows reading `{}` and `{"target":"x"}` — 25 of them in one working session —
-  competing with real findings for the same relevance window. `run_pipeline`
-  keeps its capture because "task X → 3 pivots, 4000 tokens" is a record of
-  what was worked on, which is what a later session wants.
+  states (install/decline/disable/enable) are honored, and the model brain is
+  the configured runtime CLI — everything still works with the layer off.
+- macOS binary signing and marketplace platform packaging don't apply — this
+  is plain Node source, no binaries.
+- Auto-capture is narrowed to invocations that carry a finding: `run_pipeline`,
+  the capsule, and `workspace_setup`. Capturing every invocation instead filled
+  the feed with rows reading `{}` and `{"target":"x"}` — 25 of them in one
+  working session — competing with real findings for the same relevance
+  window. `run_pipeline` keeps its capture because "task X → 3 pivots, 4000
+  tokens" is a record of what was worked on, which is what a later session
+  wants.
 - Tool results may carry a `vnodes_notice` field. The instruction block has
   always said to orient with `run_pipeline` first; that is advisory, and
   advisory lost — a session that shipped two features here made zero code
@@ -151,11 +153,11 @@ install path — so keep it at user scope in `~/.claude/skills/vnodes/`.
   states what it knows (how many calls, what has not happened), rides on the
   tools a non-orienting caller still uses, never blocks, and stops once the
   thing it asks for has happened.
-- BR-002's "no explicit init step" is now qualified: a project indexes on first
+- The "no explicit init step" design is qualified: a project indexes on first
   use once it has a `.vnodes/`, and a directory without one is refused with the
-  command that would create it. BR-002 assumed the project was the one the
-  owner chose, but a registration written outside a repo carries no project
-  root by design, so it resolves upward from the agent's working directory —
-  and one tool call was enough to build a knowledge base in a repo nobody
-  nominated. `vnodes index` is the opt-in; nothing that runs unasked creates
-  one.
+  command that would create it. The original assumption was that the project
+  was always the one you chose, but a registration written outside a
+  repo carries no project root by design, so it resolves upward from the
+  agent's working directory — and one tool call was enough to build a
+  knowledge base in a repo nobody nominated. `vnodes index` is the opt-in;
+  nothing that runs unasked creates one.

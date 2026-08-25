@@ -1,8 +1,8 @@
 'use strict';
-// The tool catalog (BR-011) — one dispatch shared by the stdio MCP server and
-// the HTTP daemon. All tools unconditionally available (BR-029). Every
-// invocation that carries a finding is auto-captured as an observation (BR-013,
-// narrowed — see callTool).
+// The tool catalog — one dispatch shared by the stdio MCP server and
+// the HTTP daemon. All tools are unconditionally available. Every
+// invocation that carries a finding is auto-captured as an observation,
+// narrowed — see callTool.
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -77,15 +77,15 @@ const TOOL_DEFS = [
  * self-reinforcing: once ~/.vnodes exists, every future walk-up terminates
  * there.
  *
- * A directory with no `.vnodes/` never opted in at all. BR-002 removed the
- * init step so a project would index on first use, which is right for a
- * project the owner chose and wrong for every directory an agent happens to
- * stand in: the registrations `vnodes setup` writes outside a repo carry no
- * project root by design (src/agents.js serverArgs), so they resolve upward
- * from the working directory — one tool call in any repo built a knowledge
- * base there, unasked, and the owner found out by reading the picker.
+ * A directory with no `.vnodes/` never opted in at all. Indexing on first use
+ * with no explicit init step is right for a project you chose and wrong
+ * for every directory an agent happens to stand in: the registrations
+ * `vnodes setup` writes outside a repo carry no project root by design
+ * (src/agents.js serverArgs), so they resolve upward from the working
+ * directory — one tool call in any repo built a knowledge base there,
+ * unasked, and you found out by reading the picker.
  * `.vnodes/` is the consent that already exists, created by `vnodes index` and
- * by nothing that runs unasked. Requiring it restores what BR-002 meant — a
+ * by nothing that runs unasked. Requiring it keeps the original intent — a
  * project that has opted in stays current on its own — and leaves a directory
  * that never opted in exactly as it was found.
  *
@@ -117,7 +117,7 @@ function ensureIndexed(projectRoot, cfg) {
    */
   const refusal = knowledgeBaseGate(projectRoot);
   if (refusal) return refusal;
-  // A project that has opted in indexes on first use — no explicit init (BR-002).
+  // A project that has opted in indexes on first use — no explicit init step.
   const st = indexStatus(projectRoot);
   if (st.state === 'uninitialized') runIndex(projectRoot, cfg);
   return indexStatus(projectRoot);
@@ -359,9 +359,9 @@ function callTool(projectRoot, name, args = {}, session = 'default') {
   const result = dispatch(projectRoot, name, args, session);
 
   /**
-   * Auto-capture, narrowed (BR-013).
+   * Auto-capture, narrowed.
    *
-   * The blueprint said every invocation. Every invocation is what filled the
+   * Capturing every invocation is what filled the
    * feed with rows whose summary is the literal argument JSON — `{}` for an
    * index_status, `{"target":"x"}` for an impact query — and those rows compete
    * for the same 500-row relevance window as real findings. The READ_ONLY_TOOLS

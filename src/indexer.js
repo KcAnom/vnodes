@@ -1,7 +1,7 @@
 'use strict';
-// M1 Indexing Engine. Parse-only (BR-006). Incremental: manifest.json holds
-// per-file content hashes and is committed so clones rebuild incrementally
-// (BR-003). Files above cfg.index.max_file_size_kb are skipped (BR-007).
+// Indexing Engine. Parse-only. Incremental: manifest.json holds
+// per-file content hashes and is committed so clones rebuild incrementally.
+// Files above cfg.index.max_file_size_kb are skipped.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -552,7 +552,7 @@ function runIndex(projectRoot, cfg, log) {
   let manifest = {};
   const stats = [];
   if (ws) {
-    // Multi-repo workspace: index every member as one workspace (BR-019).
+    // Multi-repo workspace: index every member as one workspace.
     for (const { alias, path: repoPath } of ws.repos) {
       const abs = path.resolve(ws.baseDir, repoPath);
       if (!fs.existsSync(abs)) { log?.(`repo ${alias}: missing at ${abs}`); continue; }
@@ -566,7 +566,7 @@ function runIndex(projectRoot, cfg, log) {
     manifest = r.manifest;
     stats.push({ alias: '', ...r, manifest: undefined });
   }
-  // Committed manifest: small per-file content hashes (BR-001, BR-003).
+  // Committed manifest: small per-file content hashes.
   fs.writeFileSync(path.join(engDir, 'manifest.json'),
     JSON.stringify({ version: 1, files: manifest }, null, 0));
   const setMeta = db.prepare('INSERT OR REPLACE INTO meta (key, value) VALUES (?,?)');
@@ -594,7 +594,8 @@ function runIndex(projectRoot, cfg, log) {
   return { ms: Date.now() - t0, files: fileCount, nodes: nodeCount, edges: edgeCount, stats };
 }
 
-// Cross-repo edges (BR-021 vocabulary): env-contract + shared-types heuristics.
+// Cross-repo edges: shared-types heuristic (package.json dependency name
+// matches another workspace repo's package name).
 function resolveCrossRepoEdges(db, ws, log) {
   const insEdge = db.prepare('INSERT OR REPLACE INTO edges (src_file, dst_file, kind) VALUES (?,?,?)');
   // shared types: package.json dependency name matches another repo's package name
@@ -659,7 +660,7 @@ function indexStatus(projectRoot) {
   } catch (e) {
     out.excluded = { error: e.message };
   }
-  // Empty/unsupported workspace must be surfaced explicitly, not silent (ERR-001).
+  // Empty/unsupported workspace must be surfaced explicitly, not silent.
   if (out.files === 0) out.state = 'empty — no supported files found in this tree';
   /**
    * An index.db on disk is not evidence that an index run ever finished.

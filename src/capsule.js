@@ -1,8 +1,8 @@
 'use strict';
-// M2 Context Pipeline. Request → intent preset → traversal/ranking → capsule:
-// pivot files in full, supporters as skeletons, fitted to the token budget
-// (BR-008). Five presets, auto default, debug auto-includes tests (BR-009).
-// Relevant memories attach with rationale (BR-014).
+// Context Pipeline. Request → intent preset → traversal/ranking → capsule:
+// pivot files in full, supporters as skeletons, fitted to the token budget.
+// Five presets, auto default, debug auto-includes tests.
+// Relevant memories attach with rationale.
 const fs = require('node:fs');
 const path = require('node:path');
 const { openStore, openStoreReadOnly } = require('./store');
@@ -48,7 +48,7 @@ function intentSource(task, preset, projectRoot = null) {
   return classifyIntent(task, preset, projectRoot).source;
 }
 
-// LLM-assisted intent refinement (BR-022: rule-based must work with this off).
+// LLM-assisted intent refinement — rule-based classification must work with this off.
 // Only consulted when the regexes can't classify AND the LLM layer is enabled;
 // fails soft to 'auto' on any error, timeout, or off-preset answer.
 function llmIntent(task, projectRoot) {
@@ -153,7 +153,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     .slice(0, 30);
 
   let used = 0;
-  // `omitted` is the receipt for BR-008's budget cut. The loops below used to
+  // `omitted` is the receipt for the budget cut. The loops below used to
   // just `break`, which meant the capsule was silently smaller than the ranking
   // said it should be and no reader could tell a file that scored zero from one
   // that scored well and lost to the last 200 tokens.
@@ -209,7 +209,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
        * function names while 12,676 tokens of the code the question was about
        * were dropped.
        *
-       * Clipping is what the budget contract (BR-008) asks for and what the
+       * Clipping is what the token budget asks for and what the
        * first pivot already did. The floor is the one real limit: below
        * min_clip_tokens a clip is a scrap of a file, and signatures across the
        * whole of it say more than the first few lines of it. The first pivot
@@ -259,7 +259,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
   }
   db.close();
 
-  // Auto-surface relevant memories with rationale (BR-014) — budget-counted.
+  // Auto-surface relevant memories with rationale — budget-counted.
   // Against the full budget, not contentBudget: the reserve above is the floor
   // these are guaranteed, and anything the content left unspent is theirs too.
   for (let i = 0; i < found.length; i++) {
@@ -291,7 +291,7 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     capsule.truncated = true;
     capsule.over_budget_tokens = used - budget;
   }
-  // Savings vs naive full-content of every considered file (savings envelope BR-010).
+  // Savings vs naive full-content of every considered file.
   const naive = [...pivotFiles, ...supporters].reduce((a, f) => {
     const c = readProjectFile(projectRoot, f.path);
     return a + (c ? estimateTokens(c) : 0);

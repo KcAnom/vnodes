@@ -1,6 +1,6 @@
 'use strict';
-// Impact graph + logic flow over the edge set (BR-011 tools; BR-029: available
-// unconditionally in this build).
+// Impact graph + logic flow over the edge set — both available
+// unconditionally in this build.
 const { openStore } = require('./store');
 
 // Resolve a symbol name or file path to file keys.

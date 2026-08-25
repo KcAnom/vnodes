@@ -1,8 +1,8 @@
 'use strict';
-// M8 Daemon & Diagnostics. HTTP transport is opt-in on cfg.mcp.port (BR-012);
-// auto-restart when a tool call hits a stopped daemon (BR-024); read-only
-// doctor that works with the daemon down (BR-026). Also serves the minimal
-// M9 status UI at /ui (styling left on the design-system seam).
+// Daemon & Diagnostics. HTTP transport is opt-in on cfg.mcp.port;
+// auto-restart when a tool call hits a stopped daemon; read-only
+// doctor that works with the daemon down. Also serves the minimal
+// status UI at /ui (styling left on the design-system seam).
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -170,7 +170,7 @@ function serve(projectRoot) {
       res.end(type === 'application/json' ? JSON.stringify(body, null, 2) : body);
     };
     if (req.method === 'GET' && req.url === '/status') {
-      // UI must distinguish daemon-stopped from empty-index (ERR-005) — this
+      // UI must distinguish daemon-stopped from empty-index — this
       // endpoint answering at all means the daemon is up; body carries index state.
       // Deliberately NOT overloaded with an array of projects: doctor() fetches
       // this against a foreign daemon and reads `project` to name the collision.
@@ -523,7 +523,7 @@ function serve(projectRoot) {
   });
   server.on('error', e => {
     if (e.code === 'EADDRINUSE') {
-      // Port taken (ERR-007): name the fix, don't crash silently.
+      // Port taken: name the fix, don't crash silently.
       dlog(`port ${port} in use — set VNODES_PORT or .vnodes/config.json mcp.port and restart`);
       console.error(`vnodes daemon: port ${port} in use. Fix: set VNODES_PORT=<port> or "mcp": {"port": <port>} in .vnodes/config.json`);
       process.exit(1);

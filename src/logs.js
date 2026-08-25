@@ -1,6 +1,6 @@
 'use strict';
 // Diagnostics contract: two log channels — daemon log and index log — inside
-// the project engine directory, self-truncating per cfg.log (BR-025).
+// the project engine directory, self-truncating per cfg.log.
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadConfig } = require('./config');

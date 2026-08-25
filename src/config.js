@@ -53,7 +53,7 @@ function engineDir(projectRoot) {
   const dir = path.join(projectRoot, ENGINE_DIR);
   fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
   const gi = path.join(dir, '.gitignore');
-  // Graph store is local-only and gitignored; manifest is committed (BR-001).
+  // Graph store is local-only and gitignored; manifest is committed.
   if (!fs.existsSync(gi)) fs.writeFileSync(gi, 'index.db\nlogs/\ndaemon.pid\nmemory.db\n');
   return dir;
 }

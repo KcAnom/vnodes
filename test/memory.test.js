@@ -18,7 +18,11 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { captureObservation, searchMemory, sessionContext } = require('../src/memory');
+const { openStore } = require('../src/store');
+const { runIndex } = require('../src/indexer');
+const { loadConfig } = require('../src/config');
 
 const TASK = 'refactor the daemon registry capsule and tools for the picker';
 
@@ -81,7 +85,7 @@ test('session context still reports task records — activity is its job', () =>
   assert.ok(rows.some(r => r.tool === 'run_pipeline'), 'demoting them in search removed them everywhere');
 });
 
-test('a stale finding is still returned, carrying its warning (BR-015)', () => {
+test('a stale finding is still returned, carrying its warning', () => {
   const engDir = store();
   const db = new (require('node:sqlite').DatabaseSync)(path.join(engDir, 'memory.db'));
   db.prepare('UPDATE observations SET stale = 1 WHERE kind = ?').run('manual');
@@ -128,4 +132,95 @@ test('clearActivity deletes auto rows and keeps findings', () => {
   assert.ok(out.deleted >= 1);
   const log = sessionContext(engDir, { limit: 20, readOnly: true });
   assert.ok(log.every(r => r.kind === 'manual'));
+});
+
+test('concurrent capsule completions wait for observation writes instead of locking', { timeout: 30000 }, async () => {
+  const engDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-memory-concurrent-'));
+  const idx = openStore(engDir);
+  idx.prepare('INSERT INTO files (path, repo, hash, size, lang, indexed_at) VALUES (?,?,?,?,?,?)')
+    .run('src/pivot.js', '', 'hash-1', 1, 'javascript', Date.now());
+  idx.close();
+  captureObservation(engDir, {
+    session: 'seed', tool: 'run_pipeline', file: 'src/pivot.js', summary: 'seed',
+  });
+
+  const workers = 8;
+  const writesPerWorker = 20;
+  const startsAt = Date.now() + 1000;
+  const memoryModule = path.join(__dirname, '..', 'src', 'memory.js');
+  const script = `
+    process.removeAllListeners('warning');
+    const { captureObservation } = require(${JSON.stringify(memoryModule)});
+    const startsAt = Number(process.argv[1]);
+    const worker = process.argv[2];
+    while (Date.now() < startsAt) {}
+    for (let i = 0; i < ${writesPerWorker}; i++) {
+      captureObservation(${JSON.stringify(engDir)}, {
+        session: 'worker-' + worker,
+        tool: 'run_pipeline',
+        file: 'src/pivot.js',
+        summary: 'parallel capsule ' + worker + ':' + i,
+      });
+    }
+  `;
+
+  const runWorker = worker => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script, String(startsAt), String(worker)], {
+      cwd: path.join(__dirname, '..'), stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('exit', code => code === 0
+      ? resolve()
+      : reject(new Error(`worker ${worker} exited ${code}: ${stderr}`)));
+  });
+  await Promise.all(Array.from({ length: workers }, (_, i) => runWorker(i)));
+
+  const db = new (require('node:sqlite').DatabaseSync)(path.join(engDir, 'memory.db'), { readOnly: true });
+  const count = db.prepare('SELECT COUNT(*) c FROM observations').get().c;
+  db.close();
+  assert.strictEqual(count, 1 + workers * writesPerWorker,
+    'a concurrent writer failed or lost an observation');
+});
+
+test('concurrent run_pipeline processes complete against one knowledge base', { timeout: 30000 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-pipeline-concurrent-'));
+  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'pivot.js'), 'export function pivot() { return 1; }\n');
+  runIndex(root, loadConfig(root));
+
+  const workers = 8;
+  const startsAt = Date.now() + 1000;
+  const toolsModule = path.join(__dirname, '..', 'src', 'tools.js');
+  const script = `
+    process.removeAllListeners('warning');
+    const { callTool } = require(${JSON.stringify(toolsModule)});
+    const startsAt = Number(process.argv[1]);
+    const worker = process.argv[2];
+    while (Date.now() < startsAt) {}
+    const result = callTool(${JSON.stringify(root)}, 'run_pipeline', {
+      task: 'explain pivot worker ' + worker,
+      preset: 'explore',
+    }, 'worker-' + worker);
+    if (!result.pivots || result.pivots[0]?.file !== 'src/pivot.js') process.exit(2);
+  `;
+
+  const runWorker = worker => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script, String(startsAt), String(worker)], {
+      cwd: path.join(__dirname, '..'), stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('exit', code => code === 0
+      ? resolve()
+      : reject(new Error(`pipeline worker ${worker} exited ${code}: ${stderr}`)));
+  });
+  await Promise.all(Array.from({ length: workers }, (_, i) => runWorker(i)));
+
+  const db = new (require('node:sqlite').DatabaseSync)(path.join(root, '.vnodes', 'memory.db'), { readOnly: true });
+  const count = db.prepare("SELECT COUNT(*) c FROM observations WHERE tool = 'run_pipeline'").get().c;
+  db.close();
+  assert.strictEqual(count, workers, 'a pipeline failed before recording its completion');
 });

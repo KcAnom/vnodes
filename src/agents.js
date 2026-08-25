@@ -1,8 +1,8 @@
 'use strict';
-// M5 Agent Setup. Detects installed agents, writes per-agent MCP registration
-// and instruction blocks (BR-016). Generated content lives in marker-delimited
-// blocks; hand-written content is never overwritten (BR-018). personalMode
-// skips all shared-repo writes (BR-017). Opencode and Augment are
+// Agent Setup. Detects installed agents, writes per-agent MCP registration
+// and instruction blocks. Generated content lives in marker-delimited
+// blocks; hand-written content is never overwritten. personalMode
+// skips all shared-repo writes. Opencode and Augment are
 // instructions-only (no MCP config file).
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,17 +27,17 @@ const AGENTS = [
   { id: 'cline', name: 'Cline', detect: ['~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev'], kind: 'mcp-json', file: '.cline/mcp.json', instructions: '.clinerules' },
   // pi ships no MCP client by design ("it intentionally does not include
   // built-in MCP" — pi docs/usage.md), so setup has no pi config to manage and
-  // writes AGENTS.md only. The owner keeps a hand-maintained vnodes entry in
-  // ~/.pi/agent/mcp.json alongside repomix; that file is theirs, so leave it be
+  // writes AGENTS.md only. A hand-maintained vnodes entry might already live in
+  // ~/.pi/agent/mcp.json alongside repomix; that file is yours, so leave it be
   // rather than treating its absence or presence as something setup controls.
   { id: 'pi', name: 'pi', detect: ['~/.pi'], kind: 'instructions-only', instructions: 'AGENTS.md' },
   // Prime Agent 0.7.x auto-wires remote HTTP MCP only: its TypeScript manager
   // skips every non-http server ("stdio servers self-manage in Python") and the
   // Python side implements HTTP alone. A stdio mcpServers entry there lists as
   // permanently disconnected, so setup writes AGENTS.md and no MCP config.
-  // Prime does reach vnodes — through the owner's vnodes-mcp skill, which
+  // Prime does reach vnodes — through a user-maintained vnodes-mcp skill, which
   // bridges to the stdio server from Prime's IPython kernel. That skill is
-  // theirs to maintain; setup neither writes nor validates it.
+  // yours to maintain; setup neither writes nor validates it.
   { id: 'prime-agent', name: 'Prime Agent', detect: ['~/.prime'], kind: 'instructions-only', instructions: 'AGENTS.md' },
 ];
 
@@ -153,7 +153,7 @@ function upsertMcpJson(filePath, projectRoot, { pinRoot = true } = {}) {
 }
 
 function upsertCodexToml(filePath, projectRoot, { pinRoot = true } = {}) {
-  // Hand-written Codex MCP entries are never overwritten (BR-018): only the
+  // Hand-written Codex MCP entries are never overwritten: only the
   // vnodes-marked block is managed.
   const B = '# vnodes:begin (generated)', E = '# vnodes:end';
   let existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';

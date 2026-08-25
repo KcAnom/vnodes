@@ -75,7 +75,7 @@ function startDetached(projectRoot) {
   return child.pid;
 }
 
-// Auto-restart contract (BR-024): call a tool over HTTP; if the daemon is down,
+// Auto-restart: call a tool over HTTP; if the daemon is down,
 // start it and retry.
 async function httpCall(projectRoot, tool, args, session) {
   const cfg = loadConfig(projectRoot);
@@ -106,7 +106,7 @@ function stopDaemon(projectRoot) {
   return { stopped: true, pid: st.pid };
 }
 
-// Read-only doctor (BR-026, ERR-006): diagnoses without a running daemon.
+// Read-only doctor: diagnoses without a running daemon.
 async function doctor(projectRoot) {
   const cfg = loadConfig(projectRoot);
   const checks = [];

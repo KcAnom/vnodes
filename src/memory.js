@@ -1,9 +1,9 @@
 'use strict';
-// M4 Session Memory. Findings are kind=manual (BR-013 narrowed: auto-capture
-// of every tool call filled the diary with argument JSON). Capsules attach
-// findings with a rationale (BR-014). Staleness: linked code changed → flagged
-// + demoted, never deleted (BR-015).
-const { openMemory, openStore, openMemoryReadOnly } = require('./store');
+// Session Memory. Findings are kind=manual — narrowed because auto-capture
+// of every tool call filled the diary with argument JSON. Capsules attach
+// findings with a rationale. Staleness: linked code changed → flagged
+// + demoted, never deleted.
+const { openMemory, openStoreReadOnly, openMemoryReadOnly } = require('./store');
 
 /**
  * The connection a reader gets.
@@ -40,9 +40,11 @@ function updateObservation(engDir, { id, summary, file, symbol }) {
     stale = 0;
     if (nextFile) {
       try {
-        const idx = openStore(engDir);
-        hash = idx.prepare('SELECT hash FROM files WHERE path = ?').get(nextFile)?.hash || null;
-        idx.close();
+        const idx = openStoreReadOnly(engDir);
+        if (idx) {
+          hash = idx.prepare('SELECT hash FROM files WHERE path = ?').get(nextFile)?.hash || null;
+          idx.close();
+        }
       } catch {}
     }
   }
@@ -70,9 +72,11 @@ function captureObservation(engDir, { session, tool, summary, symbol = null, fil
   let hash = null;
   if (file) {
     try {
-      const idx = openStore(engDir);
-      hash = idx.prepare('SELECT hash FROM files WHERE path = ?').get(file)?.hash || null;
-      idx.close();
+      const idx = openStoreReadOnly(engDir);
+      if (idx) {
+        hash = idx.prepare('SELECT hash FROM files WHERE path = ?').get(file)?.hash || null;
+        idx.close();
+      }
     } catch {}
   }
   db.prepare('INSERT INTO observations (ts, session, tool, kind, summary, symbol, file, hash_at_save) VALUES (?,?,?,?,?,?,?,?)')
@@ -84,7 +88,8 @@ function captureObservation(engDir, { session, tool, summary, symbol = null, fil
 function refreshStaleness(engDir) {
   const db = openMemory(engDir);
   let idx;
-  try { idx = openStore(engDir); } catch { db.close(); return; }
+  try { idx = openStoreReadOnly(engDir); } catch { db.close(); return; }
+  if (!idx) { db.close(); return; }
   const linked = db.prepare('SELECT id, file, hash_at_save FROM observations WHERE file IS NOT NULL AND stale = 0').all();
   const upd = db.prepare('UPDATE observations SET stale = 1 WHERE id = ?');
   for (const o of linked) {
@@ -130,7 +135,7 @@ const isTaskRecord = o => o.kind !== 'manual' && TASK_TOOLS.has(o.tool);
 
 // Relevance surface: term overlap between the task and stored observations.
 // Stale observations are demoted (score halved) but still returned with a
-// warning — never silently dropped (BR-015).
+// warning — never silently dropped.
 function searchMemory(engDir, query, { session = null, limit = 8, readOnly = false, findingsOnly = false } = {}) {
   if (!readOnly) refreshStaleness(engDir);
   const db = readerDb(engDir, readOnly);
@@ -173,7 +178,7 @@ function searchMemory(engDir, query, { session = null, limit = 8, readOnly = fal
 function sessionContext(engDir, { session = null, limit = 20, readOnly = false } = {}) {
   if (!readOnly) refreshStaleness(engDir);
   const db = readerDb(engDir, readOnly);
-  // Cross-session recall: current and previous sessions both returned (SM-4),
+  // Cross-session recall: current and previous sessions both returned,
   // but the caller's own session sorts first and each row says whose it is.
   const rows = session
     ? db.prepare('SELECT * FROM observations ORDER BY (session = ?) DESC, ts DESC LIMIT ?').all(session, limit)

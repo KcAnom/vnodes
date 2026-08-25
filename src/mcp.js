@@ -1,5 +1,5 @@
 'use strict';
-// M3 MCP Server — stdio transport (default, BR-012). Newline-delimited
+// MCP Server — stdio transport (default). Newline-delimited
 // JSON-RPC 2.0 implementing the MCP handshake + tools/list + tools/call.
 // Zero SDK deps.
 const { TOOL_DEFS, callTool } = require('./tools');

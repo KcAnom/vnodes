@@ -1,7 +1,7 @@
 'use strict';
-// M6 Multi-Repo Workspaces. Definition at .vnodes/workspace.json in the primary
-// repo; paths resolve relative to the folder containing .vnodes (BR-020);
-// secondary repos get an auto-written parent_workspace.json pointer (BR-019).
+// Multi-Repo Workspaces. Definition at .vnodes/workspace.json in the primary
+// repo; paths resolve relative to the folder containing .vnodes;
+// secondary repos get an auto-written parent_workspace.json pointer.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -11,7 +11,7 @@ function loadWorkspace(projectRoot) {
   let defPath = null, baseDir = null;
   if (fs.existsSync(wsPath)) { defPath = wsPath; baseDir = projectRoot; }
   else if (fs.existsSync(parentPtr)) {
-    // Opening a secondary repo still loads the full workspace (BR-019).
+    // Opening a secondary repo still loads the full workspace.
     try {
       const ptr = JSON.parse(fs.readFileSync(parentPtr, 'utf8'));
       const primary = path.resolve(projectRoot, ptr.primary);
@@ -22,9 +22,9 @@ function loadWorkspace(projectRoot) {
   if (!defPath) return null;
   let def;
   try { def = JSON.parse(fs.readFileSync(defPath, 'utf8')); } catch { return null; }
-  const name = def.name || def.workspace_id; // workspace_id accepted in place of name (BR-020)
+  const name = def.name || def.workspace_id; // workspace_id accepted in place of name
   const repos = (def.repos || []).map(r => ({ alias: r.alias, path: r.path }));
-  // Root repo is always primary (BR-020).
+  // Root repo is always primary.
   if (!repos.some(r => path.resolve(baseDir, r.path) === baseDir))
     repos.unshift({ alias: def.primary_alias || 'root', path: '.' });
   return { name, repos, baseDir, primaryRoot: baseDir };

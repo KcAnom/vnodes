@@ -97,7 +97,7 @@ project: resolved upward from cwd (--project <path> to override)`);
       out(`indexed ${projectRoot}: ${r.files} files, ${r.nodes} nodes, ${r.edges} edges in ${r.ms}ms`);
       break;
     }
-    case 'reindex': { // force re-index: full restart + rebuild (ERR-002)
+    case 'reindex': { // force re-index: full restart + rebuild
       if (refuseHomeIndex()) break;
       const { stopDaemon, startDetached } = require('../src/daemon');
       const eng = engineDir(projectRoot);
@@ -142,7 +142,7 @@ project: resolved upward from cwd (--project <path> to override)`);
       else out(d.daemonState(hub ? null : projectRoot));
       break;
     }
-    case 'call': { // HTTP tool call with auto-restart (BR-024)
+    case 'call': { // HTTP tool call with auto-restart
       const { httpCall } = require('../src/daemon');
       const tool = args.shift();
       const a = flags.args ? JSON.parse(flags.args) : {};
@@ -295,7 +295,7 @@ project: resolved upward from cwd (--project <path> to override)`);
       out(`vnodes kb: no subcommand "${sub}". Use: list | discover [path...] | register [path] | forget <id> | hide <id> | show <id>`);
       break;
     }
-    case 'setup': { // agent setup (M5)
+    case 'setup': { // agent setup
       const { setupAgents, detectAgents } = require('../src/agents');
       if (flags.detect) { out(detectAgents().map(a => ({ id: a.id, name: a.name, installed: a.installed }))); break; }
       const cfg = loadConfig(projectRoot);
