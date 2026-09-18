@@ -73,10 +73,30 @@ function daemonState(projectRoot) {
  */
 function claimIndexing(projectRoot, port) {
   if (projectRoot == null) return false; // a hub indexes nothing
-  const state = daemonState(projectRoot);
-  if (state.running && state.pid !== process.pid) return false;
-  writePidFile(pidFile(projectRoot), { pid: process.pid, port });
-  return true;
+  const pf = pidFile(projectRoot);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const state = daemonState(projectRoot);
+    if (state.running && state.pid !== process.pid) return false;
+    // A stale or corrupt latch is ours to replace: remove it, then create the
+    // replacement EXCLUSIVELY. Two daemons booting in the same moment used to
+    // both pass the check above and both write — two watchers re-indexing one
+    // store, and the SQLITE_BUSY storms that follow. link() fails with EEXIST
+    // when a claimer won the gap between the check and the write, and the
+    // retry loop re-reads their liveness instead of writing over them.
+    try { fs.unlinkSync(pf); } catch {}
+    const tmp = `${pf}.${process.pid}.tmp`;
+    try {
+      const fd = fs.openSync(tmp, 'wx');
+      try { fs.writeSync(fd, JSON.stringify({ pid: process.pid, port })); } finally { fs.closeSync(fd); }
+      fs.linkSync(tmp, pf);
+      try { fs.unlinkSync(tmp); } catch {}
+      return true;
+    } catch (e) {
+      try { fs.unlinkSync(tmp); } catch {}
+      if (e.code !== 'EEXIST') return false; // unwritable .vnodes — do not pretend to own indexing
+    }
+  }
+  return false;
 }
 // A null projectRoot starts a hub: no project, no watcher, the registry and the
 // picker only. cwd still has to be something real for spawn, so it is this

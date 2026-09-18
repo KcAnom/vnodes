@@ -649,7 +649,12 @@ function mapEvents(req, res, projectRoot, cfg, query, hello = {}) {
   const timer = setInterval(() => {
     let next;
     try { next = indexStamp(engDir); } catch { return; }
-    if (next === stamp) { res.write(': keepalive\n\n'); return; }
+    if (next === stamp) {
+      // Same guard as the data frame below: a client gone mid-interval must
+      // not turn the keepalive into the one write that throws.
+      try { res.write(': keepalive\n\n'); } catch {}
+      return;
+    }
     stamp = next;
     // The same payload /ui/map/data returns. One shape, so a live frame and a
     // fresh load cannot drift into rendering differently.

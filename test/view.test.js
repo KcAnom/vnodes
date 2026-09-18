@@ -811,6 +811,39 @@ test('pidFile(null) is the hub pidfile, never path.join(null)', () => {
 // it has, it has to carry itself — these pin that it does, and that every
 // destination is a page the daemon actually serves.
 
+test('two simultaneous claimers yield exactly one owner', async () => {
+  const { spawn } = require('node:child_process');
+  const root = fixture({ 'src/one.ts': 'export function one() { return 1; }\n' });
+  // The race this pins: both processes pass the liveness check (no pidfile
+  // yet), and the old code then both wrote — two owners, two watchers, one
+  // store. The exclusive link forces the loser to re-read and find the
+  // winner alive. The winner lingers 500ms so the loser's retry sees a live
+  // pid, which is the whole point.
+  const script = `
+    const { claimIndexing } = require(${JSON.stringify(path.join(__dirname, '..', 'src', 'daemon'))});
+    setTimeout(() => {
+      const won = claimIndexing(${JSON.stringify(root)}, 41009);
+      process.stdout.write(won ? 'owner' : 'follower');
+      if (won) setTimeout(() => process.exit(0), 500); else process.exit(0);
+    }, 40);
+  `;
+  const run = () => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', c => { out += c; });
+    child.on('close', code => (code === 0 ? resolve(out) : reject(new Error(`exit ${code}: ${child.stderr.read()}`))));
+    setTimeout(() => { child.kill(); resolve('timeout'); }, 5000);
+  });
+  const results = (await Promise.all([run(), run()])).sort();
+  assert.deepStrictEqual(results, ['follower', 'owner'],
+    `both claimed: ${JSON.stringify(results)}`);
+  // And the surviving latch is whole, valid JSON.
+  const { pidFile, daemonState } = require('../src/daemon');
+  assert.strictEqual(daemonState(root).running, false,
+    'the winner exited; its latch is stale but parseable');
+  assert.ok(daemonState(root).stale_pidfile || !fs.existsSync(pidFile(root)));
+});
+
 test('the plain status page carries its own way back', () => {
   const { uiHtml } = require('../src/daemon');
   const html = uiHtml({ ui: { sidebar_refresh_s: 10 } });
@@ -820,6 +853,15 @@ test('the plain status page carries its own way back', () => {
   // Above the fold matters here: the reason this page reads as a dead end is
   // navigation placed under the content, not the absence of links.
   assert.ok(html.indexOf('<nav') < html.indexOf('<h1'), 'nav is not first');
+});
+
+test('a garbage refresh interval falls back, it does not become a hot loop', () => {
+  const { uiHtml } = require('../src/daemon');
+  // A non-numeric config value used to interpolate as NaN; setInterval
+  // coerces NaN to 1 ms — a thousand fetches a second on the no-bundle floor.
+  assert.match(uiHtml({ ui: { sidebar_refresh_s: 'gibberish' } }), /setInterval\(tick,10000\)/);
+  assert.match(uiHtml({ ui: {} }), /setInterval\(tick,10000\)/);
+  assert.match(uiHtml({ ui: { sidebar_refresh_s: 5 } }), /setInterval\(tick,5000\)/);
 });
 
 test('every link on the plain page is a page the daemon serves', () => {

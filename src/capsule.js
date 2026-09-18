@@ -74,15 +74,20 @@ function rankFiles(db, task, intent, repos) {
   const qTerms = terms(task);
   const repoFilter = repos && repos.length
     ? ` WHERE repo IN (${repos.map(() => '?').join(',')})` : '';
-  const files = db.prepare(`SELECT path, repo, lang FROM files${repoFilter}`).all(...(repos || []));
+  const files = db.prepare(`SELECT path, repo, lang, size FROM files${repoFilter}`).all(...(repos || []));
   const inDeg = new Map(db.prepare('SELECT dst_file d, COUNT(*) c FROM edges GROUP BY dst_file').all().map(r => [r.d, r.c]));
-  const symbolHit = db.prepare('SELECT COUNT(*) c FROM nodes WHERE file = ? AND lower(name) LIKE ?');
+  // ESCAPE turns the task's own _ and % into literals: an underscore in a
+  // symbol name is a character, not SQL's any-single-char wildcard — without
+  // it, a task naming foo_bar scored every fooXbar in the tree equally. The
+  // escape char is ! because terms are [a-z0-9_] only; it is escaped anyway
+  // in case the term source ever widens.
+  const symbolHit = db.prepare("SELECT COUNT(*) c FROM nodes WHERE file = ? AND lower(name) LIKE ? ESCAPE '!'");
   return files.map(f => {
     let score = 0;
     const lp = f.path.toLowerCase();
     for (const t of qTerms) {
       if (lp.includes(t)) score += 3;
-      score += Math.min(symbolHit.get(f.path, `%${t}%`).c, 5);
+      score += Math.min(symbolHit.get(f.path, `%${t.replace(/([%_!])/g, '!$1')}%`).c, 5);
     }
     score += Math.min(inDeg.get(f.path) || 0, 10) * 0.3; // central files matter
     const test = isTestFile(f.path);
@@ -291,11 +296,12 @@ function buildCapsule(projectRoot, engDir, cfg, { task, preset, max_tokens, repo
     capsule.truncated = true;
     capsule.over_budget_tokens = used - budget;
   }
-  // Savings vs naive full-content of every considered file.
-  const naive = [...pivotFiles, ...supporters].reduce((a, f) => {
-    const c = readProjectFile(projectRoot, f.path);
-    return a + (c ? estimateTokens(c) : 0);
-  }, 0);
+  // Savings vs the naive full-content baseline — from the index's own size
+  // column, not a second read of every file: the old version re-read all ~30
+  // supporters (megabytes per capsule) to compute a number that is an
+  // estimate either way. bytes/4 vs chars/4 is the same approximation class
+  // estimateTokens already is; only multibyte-heavy files drift, low.
+  const naive = [...pivotFiles, ...supporters].reduce((a, f) => a + Math.ceil((f.size || 0) / 4), 0);
   capsule.savings_pct = naive > 0 ? Math.round((1 - used / naive) * 100) : 0;
   return capsule;
 }

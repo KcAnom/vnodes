@@ -46,6 +46,13 @@ function uiHtml(cfg) {
   // depending on any of the machinery that might be what broke. Plain HTML, one
   // fetch loop, no build step. It is also the only remaining reader of
   // cfg.ui.sidebar_refresh_s.
+  // Number() before interpolation: a garbage config value used to reach
+  // setInterval as NaN, which Node coerces to a 1 ms delay — a thousand
+  // fetches a second on the one page that must render when everything else
+  // broke. (The multiplication also meant the value could never inject into
+  // the inline script; this makes the fallback explicit too.)
+  const refreshS = Number(cfg.ui.sidebar_refresh_s) > 0 ? Number(cfg.ui.sidebar_refresh_s) : 10;
+  const refreshMs = refreshS * 1000;
   return `<!doctype html><html><head><meta charset="utf-8"><title>vnodes — status</title>
 <link rel="stylesheet" href="/ui/theme.css"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body><main>
@@ -82,7 +89,7 @@ for(const k of ['files','nodes','edges'])document.getElementById(k).textContent=
 document.getElementById('repos').textContent=(s.index.repos||[]).join(', ')||'–';
 document.getElementById('last').textContent=s.index.last_index?new Date(s.index.last_index).toLocaleString():'–';
 }catch(e){document.getElementById('state').textContent='daemon unreachable';}}
-tick();setInterval(tick,${(cfg.ui.sidebar_refresh_s || 10) * 1000});
+tick();setInterval(tick,${refreshMs});
 </script></main></body></html>`;
 }
 

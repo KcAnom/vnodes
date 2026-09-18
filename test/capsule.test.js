@@ -252,3 +252,17 @@ test('a clipped pivot still gets its skeleton, so the cut symbols are visible', 
       `${p.file} was clipped, got no skeleton, and nothing recorded why`);
   }
 });
+
+test('an underscore in the task matches the real symbol, not any character', () => {
+  // SQL LIKE treats _ as any-single-char: unescaped, a task naming foo_bar
+  // scored every fooXbar in the tree exactly as high as foo_bar itself.
+  const root = fixture({
+    'src/real.ts': 'export function foo_bar() { return 1; }\n',
+    'src/decoy.ts': 'export function fooabar() { return 2; }\n',
+  });
+  const c = capsule(root, { task: 'fix foo_bar', readOnly: true });
+  const picked = [...c.pivots, ...c.skeletons].map(p => p.file);
+  assert.ok(picked.includes('src/real.ts'), 'the real symbol must rank');
+  assert.ok(!picked.includes('src/decoy.ts'),
+    'fooabar must not match a foo_bar query through the _ wildcard');
+});
