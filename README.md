@@ -106,7 +106,9 @@ npm run verify  # the above, plus the UI build and the render checks
 
 `npm test` is the floor and stays dependency-free. `npm run verify` adds the
 stages that need a built bundle, a daemon and a browser; it starts what is
-missing and stops whatever it started.
+missing and stops whatever it started. CI runs the same gate on every push
+and pull request (`.github/workflows/verify.yml`), so a red verify cannot
+merge unnoticed.
 
 A stage that cannot run fails the run rather than being skipped quietly — a
 verify that reports a pass while silently omitting its browser stage is the

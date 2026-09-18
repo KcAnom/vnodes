@@ -1,0 +1,35 @@
+# The whole gate, in CI: unit tests, UI typecheck + build, and the render
+# checks that assert what the pages promise. Nothing is allowed to skip —
+# a stage that cannot run fails the run (scripts/verify.mjs's own rule),
+# which is why Chrome is installed explicitly rather than hoped for.
+#
+# Local equivalent: npm run verify
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      # The render stage refuses to pass without a browser. Install Chrome
+      # deterministically and point findChrome at it via CHROME (which
+      # scripts/verify.mjs treats as authoritative when set).
+      - uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+      - name: Point verify at the installed Chrome
+        run: echo "CHROME=$(readlink -f "$(command -v chrome)")" >> "$GITHUB_ENV"
+      # verify treats a missing ui/node_modules as a skip, and a skip is a
+      # failure — so the toolchain is installed up front, visibly.
+      - name: Install the UI toolchain
+        run: npm --prefix ui ci
+      - name: Verify (unit tests, build, render checks)
+        run: npm run verify
