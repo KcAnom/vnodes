@@ -412,9 +412,17 @@ function listKbs({ launchRoot = null, cfg = null, includeHidden = false } = {}) 
       ? `no registry yet at ${dir} — a project is listed here the first time it finishes an index run`
       : `registry directory unreadable: ${e.message}`);
   }
+  // hub.pid lives here by design (lifecycle pidFile(null) writes the hub's
+  // latch beside the registry), and `.tmp` orphans are swept on the next
+  // registry write. Neither is a malformed entry — counting them made every
+  // hub-mode picker load report a corruption that did not exist.
+  const housekeeping = n => n === 'hub.pid' || n.endsWith('.tmp');
   const ids = names.filter(n => ID_RE.test(n));
-  const skipped = names.length - ids.length;
-  if (skipped > 0) notes.push(`${skipped} entr${skipped === 1 ? 'y' : 'ies'} in ${dir} did not look like a knowledge base id and were skipped`);
+  const skippedNames = names.filter(n => !ID_RE.test(n) && !housekeeping(n));
+  if (skippedNames.length > 0) {
+    notes.push(`${skippedNames.length} entr${skippedNames.length === 1 ? 'y' : 'ies'} in ${dir} `
+      + `did not look like a knowledge base id and ${skippedNames.length === 1 ? 'was' : 'were'} skipped`);
+  }
   const scanCapped = ids.length > rcfg.scan_cap;
   if (scanCapped) notes.push(`registry holds ${ids.length} entries; only the first ${rcfg.scan_cap} were read (registry.scan_cap)`);
   const scan = ids.slice(0, rcfg.scan_cap);
