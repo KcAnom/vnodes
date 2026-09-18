@@ -142,6 +142,31 @@ const GATE_EXEMPT_TOOLS = new Set([
 ]);
 
 /**
+ * Places that are not projects no matter who asks: a volume root, and the
+ * operating system's own trees. The $HOME guard above is about size and
+ * consent; this one is about the same blast radius one step over — an agent
+ * calling create_knowledge_base with path: '/' would mkdir /.vnodes and then
+ * walk every mounted filesystem, and the run would never finish. There is no
+ * --force through a tool: indexing a system tree is a shell command for a
+ * human who means it, exactly like `vnodes index --project ~`.
+ */
+const SYSTEM_ROOTS = process.platform === 'win32'
+  ? ['C:\\Windows', 'C:\\Program Files', 'C:\\Program Files (x86)', 'C:\\ProgramData']
+  : ['/System', '/Library', '/usr', '/etc', '/bin', '/sbin', '/boot', '/dev', '/proc', '/sys'];
+
+function refuseSystemTarget(target) {
+  const parsed = path.parse(target);
+  if (parsed.root === target) {
+    return `refused: ${target} is a volume root, not a project — indexing it would walk every mounted filesystem and never finish. Name a project inside it.`;
+  }
+  const hit = SYSTEM_ROOTS.find(p => target === p || target.startsWith(p + path.sep));
+  if (hit) {
+    return `refused: ${target} is part of the operating system (under ${hit}), not a project — vnodes will not create .vnodes inside it. Name a project under your own directories.`;
+  }
+  return null;
+}
+
+/**
  * Make a directory a knowledge base, and index it.
  *
  * Handled before `dispatch` computes engineDir, because engineDir mkdirs
@@ -166,6 +191,10 @@ function createKnowledgeBase(projectRoot, args, session) {
       path: target,
       reason: 'your home directory is too large to be one knowledge base — indexing it produced 541,275 files and never finished. Name a project inside it instead, or run `vnodes index --project ~` from a shell if you truly mean it.',
     };
+  }
+  const systemRefusal = refuseSystemTarget(target);
+  if (systemRefusal) {
+    return { created: false, state: 'refused', path: target, reason: systemRefusal };
   }
   const directoryExisted = fs.existsSync(target);
   if (!directoryExisted) fs.mkdirSync(target, { recursive: true });

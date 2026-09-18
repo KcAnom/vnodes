@@ -112,6 +112,32 @@ test('the home directory is refused even when asked for by name', () => {
   assert.ok(!fs.existsSync(path.join(os.homedir(), '.vnodes')), 'created ~/.vnodes');
 });
 
+test('volume roots and operating-system trees are refused', () => {
+  for (const target of ['/', '/usr', '/System/Library', '/etc', '/bin']) {
+    const r = callTool(os.tmpdir(), 'create_knowledge_base', { path: target });
+    assert.equal(r.state, 'refused', `${target} should be refused`);
+    assert.equal(r.created, false, `${target} should create nothing`);
+    assert.match(r.reason, /refused/);
+    assert.ok(!fs.existsSync(path.join(path.resolve(target), '.vnodes')),
+      `created ${path.join(target, '.vnodes')}`);
+  }
+  // /var, /tmp and /private are deliberately NOT refused: macOS temp dirs live
+  // under /var/folders, and a temp directory is a legitimate place to stand up
+  // a throwaway knowledge base. A volume root, $HOME and the OS trees above
+  // carry the whole blast radius.
+  // A path that merely CONTAINS a system name as a segment is an ordinary
+  // project directory and stays eligible — but prove that on a bounded
+  // subdir, never on os.tmpdir() itself: os.tmpdir() is the shared macOS
+  // temp ROOT, and a knowledge base created there indexes every fixture on
+  // the machine and leaves a T/.vnodes that re-routes findProjectRoot for
+  // every temp directory under it (observed live 2026-09-18).
+  const eligible = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-eligible-'));
+  const ok = callTool(eligible, 'create_knowledge_base', {});
+  assert.notEqual(ok.state, 'refused');
+  assert.equal(ok.created, true);
+  fs.rmSync(eligible, { recursive: true, force: true });
+});
+
 test('a refused create leaves no engine directory behind', () => {
   const dir = unopted();
   callTool(os.homedir(), 'create_knowledge_base', {});
