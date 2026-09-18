@@ -114,6 +114,10 @@ A fresh clone needs three one-time steps before it is fully wired: the UI
 toolchain (`npm --prefix ui ci`, verify tells you), an index (`vnodes index`,
 the render stage tells you), and the pre-commit hook (`vnodes hook install`) —
 hooks live in your local `.git/`, so CI cannot carry them to a clone for you.
+To update an existing clone on any machine — pull, test floor, doctor, and a
+named list of the daemons that are now running old code — run:
+`sh scripts/update-vnodes.sh` (flags: `--stash`, `--restart-daemons`,
+`--skip-tests`, `--help`).
 
 A stage that cannot run fails the run rather than being skipped quietly — a
 verify that reports a pass while silently omitting its browser stage is the

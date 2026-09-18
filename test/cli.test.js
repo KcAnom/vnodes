@@ -88,3 +88,15 @@ test('reindex --project $HOME without --force exits 1 before rebuild', () => {
   assert.equal(r.status, 1);
   assert.match(`${r.stdout}\n${r.stderr}`, /--force/);
 });
+
+test('update-vnodes --help prints usage and exits 0', () => {
+  const r = run(['--help'], { timeout: 8000 });
+  // run() prepends BIN; exercise the script directly instead.
+  const s = spawnSync('sh', [path.join(__dirname, '..', 'scripts', 'update-vnodes.sh'), '--help'], {
+    encoding: 'utf8', timeout: 8000, env: process.env,
+  });
+  assert.equal(s.status, 0);
+  assert.match(s.stdout, /bring this clone of vnodes up to date/);
+  assert.match(s.stdout, /--restart-daemons/);
+  assert.equal(r.status, 0, 'the unrelated --help passthrough must stay clean');
+});
