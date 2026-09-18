@@ -408,6 +408,7 @@ function ForgetButton({
         onClick={go}
         disabled={busy || ids.length === 0}
         title={detail}
+        data-action="kb-forget"
         className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
       >
         <Trash2 className="size-3" />

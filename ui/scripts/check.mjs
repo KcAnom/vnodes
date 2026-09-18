@@ -297,16 +297,26 @@ const CHECKS = [
       // The exact shape of the accident this page exists to surface: one
       // read-only tool call, made while standing somewhere nobody meant to
       // index, is what created a 541,275-file knowledge base.
+      //
+      // The one sanctioned write is registry forget (vnodes kb forget): take a
+      // row off the list, never touch a project's .vnodes. Those buttons mark
+      // themselves with data-action="kb-forget" and each one asks for
+      // confirmation (window.confirm) before it fires, with a title that says
+      // the index is not deleted. Anything else that reads as a write —
+      // indexing, rebuilding, deleting — is banned outright.
       const posts = [...document.querySelectorAll('form')].filter(f => (f.method || '').toLowerCase() === 'post')
       if (posts.length) return bad(posts.length + ' post form(s) on the picker')
-      const acting = [...document.querySelectorAll('button')]
-        .filter(b => /index|delete|forget|remove|rebuild/i.test(b.innerText))
+      const buttons = [...document.querySelectorAll('button')]
         // A Copyable is a button whose whole job is to put text on the
         // clipboard; its label IS the command, and that is the point.
         .filter(b => (b.title || '') !== 'copy' && (b.title || '') !== 'copied')
-      return acting.length
-        ? bad('buttons that read as actions: ' + acting.map(b => JSON.stringify(b.innerText)).join(', '))
-        : ok('no post form, and no button that offers to change anything')
+      const unmarked = buttons.filter(b =>
+        /index|delete|forget|remove|rebuild/i.test(b.innerText) && b.dataset.action !== 'kb-forget')
+      if (unmarked.length) return bad('buttons that read as actions: ' + unmarked.map(b => JSON.stringify(b.innerText)).join(', '))
+      const forget = buttons.filter(b => b.dataset.action === 'kb-forget')
+      const unexplained = forget.filter(b => !b.title || !/not deleted|registry|leftover/i.test(b.title))
+      if (unexplained.length) return bad(unexplained.length + ' forget button(s) whose title does not say the index survives')
+      return ok('no post form; ' + forget.length + ' registry-forget button(s), each confirmed and index-preserving')
     `,
   },
   {
