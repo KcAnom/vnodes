@@ -28,8 +28,18 @@ const height = Number(heightArg || 1000)
 const settle = Number(settleArg || 4000)
 
 const targets = await (await fetch('http://127.0.0.1:9222/json/list')).json()
-const page = targets.find((target) => target.type === 'page')
-if (!page) throw new Error('no page target — start chrome with --remote-debugging-port=9222')
+let page = targets.find((target) => target.type === 'page')
+if (!page) {
+  // A headless Chrome whose only page was consumed (a previous check.mjs run
+  // closes what it opens) lists zero targets, and every shot would die here
+  // until someone thought to restart the browser. Create the page instead.
+  // Chrome 111+ requires PUT for /json/new; older builds answered GET.
+  const created = await fetch('http://127.0.0.1:9222/json/new?about:blank', { method: 'PUT' })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null)
+  if (!created) throw new Error('no page target and none could be created — restart chrome with --remote-debugging-port=9222')
+  page = created
+}
 
 const socket = new WebSocket(page.webSocketDebuggerUrl)
 const pending = new Map()
