@@ -29,10 +29,30 @@ function pidFile(projectRoot) {
   return path.join(projectRoot, '.vnodes', 'daemon.pid');
 }
 
+/**
+ * Write a pidfile so a concurrent or crashing writer can never leave half of
+ * one behind. The pidfile is the latch every other daemon, `daemon stop` and
+ * `doctor` read first; a truncated write used to be fatal twice over — the
+ * JSON.parse in daemonState threw, and that throw sat inside the claim timer,
+ * which took the whole daemon down within five seconds of boot (verified
+ * 2026-08-25: `garbage{` in daemon.pid killed a running daemon). tmp + rename
+ * is atomic on the same filesystem, which the pidfile always is.
+ */
+function writePidFile(file, payload) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(payload));
+  fs.renameSync(tmp, file);
+}
+
 function daemonState(projectRoot) {
   const pf = pidFile(projectRoot);
   if (!fs.existsSync(pf)) return { running: false };
-  const { pid, port } = JSON.parse(fs.readFileSync(pf, 'utf8'));
+  // A pidfile this process cannot parse is reported, not thrown. It is treated
+  // as stale — `daemon stop` removes it, `claimIndexing` replaces it — because
+  // a pidfile that cannot be read was written by a process that is gone.
+  let pid = null, port = null;
+  try { ({ pid, port } = JSON.parse(fs.readFileSync(pf, 'utf8'))); }
+  catch { return { running: false, corrupt_pidfile: true, stale_pidfile: true, pid: null, port: null }; }
   try { process.kill(pid, 0); return { running: true, pid, port }; }
   catch { return { running: false, stale_pidfile: true, pid, port }; }
 }
@@ -55,7 +75,7 @@ function claimIndexing(projectRoot, port) {
   if (projectRoot == null) return false; // a hub indexes nothing
   const state = daemonState(projectRoot);
   if (state.running && state.pid !== process.pid) return false;
-  fs.writeFileSync(pidFile(projectRoot), JSON.stringify({ pid: process.pid, port }));
+  writePidFile(pidFile(projectRoot), { pid: process.pid, port });
   return true;
 }
 // A null projectRoot starts a hub: no project, no watcher, the registry and the
@@ -99,7 +119,8 @@ async function httpCall(projectRoot, tool, args, session) {
 function stopDaemon(projectRoot) {
   const st = daemonState(projectRoot);
   if (!st.running) {
-    if (st.stale_pidfile) fs.unlinkSync(pidFile(projectRoot));
+    // ENOENT is a concurrent `stop` winning the race, not a failure.
+    if (st.stale_pidfile) { try { fs.unlinkSync(pidFile(projectRoot)); } catch {} }
     return { stopped: false, reason: st.stale_pidfile ? 'stale pidfile removed' : 'not running' };
   }
   process.kill(st.pid, 'SIGTERM');
@@ -201,4 +222,4 @@ async function doctor(projectRoot) {
   return { project: projectRoot, checks, healthy: checks.every(c => c.ok) };
 }
 
-module.exports = { pidFile, daemonState, claimIndexing, startDetached, httpCall, stopDaemon, doctor };
+module.exports = { pidFile, writePidFile, daemonState, claimIndexing, startDetached, httpCall, stopDaemon, doctor };

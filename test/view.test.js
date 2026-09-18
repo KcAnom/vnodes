@@ -769,6 +769,33 @@ test('a dead owner is taken over, not deferred to forever', () => {
   assert.strictEqual(JSON.parse(fs.readFileSync(pidPath, 'utf8')).port, 41003);
 });
 
+test('a corrupt pidfile is reported, never fatal, and does not block claiming', () => {
+  const { pidFile, daemonState, claimIndexing } = require('../src/daemon');
+  const root = fixture({ 'src/one.ts': 'export function one() { return 1; }\n' });
+  const pidPath = path.join(root, '.vnodes', 'daemon.pid');
+  // Exactly the bytes a crash mid-write leaves: verified 2026-08-25 that this
+  // killed a RUNNING daemon within five seconds via the claim timer.
+  fs.writeFileSync(pidPath, 'garbage{');
+  const st = daemonState(root);
+  assert.strictEqual(st.running, false, 'an unreadable pidfile is not a running daemon');
+  assert.strictEqual(st.corrupt_pidfile, true, 'the corruption is named, not swallowed');
+  assert.strictEqual(st.stale_pidfile, true, 'a corrupt pidfile is stale by definition — its writer is gone');
+  assert.strictEqual(claimIndexing(root, 41004), true, 'a corrupt pidfile must not block indexing forever');
+  // The claim rewrote the latch, and the atomic write left whole JSON behind.
+  assert.deepStrictEqual(
+    JSON.parse(fs.readFileSync(pidPath, 'utf8')), { pid: process.pid, port: 41004 });
+  assert.strictEqual(fs.readdirSync(path.join(root, '.vnodes')).filter(n => n.endsWith('.tmp')).length, 0,
+    'no tmp file left beside the pidfile');
+});
+
+test('a corrupt pidfile is removed by stopDaemon like a stale one', () => {
+  const { pidFile, stopDaemon } = require('../src/daemon');
+  const root = fixture({ 'src/one.ts': 'export function one() { return 1; }\n' });
+  fs.writeFileSync(path.join(root, '.vnodes', 'daemon.pid'), 'garbage{');
+  assert.deepStrictEqual(stopDaemon(root), { stopped: false, reason: 'stale pidfile removed' });
+  assert.ok(!fs.existsSync(pidFile(root)), 'the corrupt pidfile is gone, so the next start is clean');
+});
+
 test('pidFile(null) is the hub pidfile, never path.join(null)', () => {
   const { pidFile, daemonState, claimIndexing, stopDaemon } = require('../src/daemon');
   const { registryDir } = require('../src/registry');
