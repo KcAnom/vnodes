@@ -19,7 +19,7 @@ const { stalenessNotice } = require('./staleness');
 const { uiHtml, uiThemeCss, uiNotFound } = require('./daemon/pages');
 const { UI_API_ROUTES, uiApi, composition, cachedComposition, capsuleForUi,
         observationCounts, oversizeRefusal, tailLog } = require('./daemon/ui-api');
-const { pidFile, daemonState, claimIndexing, startDetached, httpCall, stopDaemon,
+const { pidFile, writePidFile, daemonState, claimIndexing, startDetached, httpCall, stopDaemon,
         doctor } = require('./daemon/lifecycle');
 
 // Watch the project tree and re-index on source changes, debounced, so the
@@ -105,6 +105,37 @@ function allowedHosts(port) {
 }
 
 /**
+ * Accumulate a JSON request body under `maxBody`, then hand the buffer to `cb`.
+ *
+ * Over the cap: 413, socket destroyed, `cb` never runs. The cap is per-route
+ * repetition extracted — five handlers carried byte-identical copies of this
+ * loop, and three of the five had it while hide/show and notes/forget buffered
+ * unbounded bodies.
+ */
+function collectBody(req, send, maxBody, cb) {
+  const chunks = [];
+  let size = 0;
+  let tooBig = false;
+  req.on('data', c => {
+    if (tooBig) return;
+    size += c.length;
+    if (size > maxBody) {
+      tooBig = true;
+      // ok:false everywhere — /rpc clients read it; /ui clients read the status
+      // code and are merely unconfused by the extra field.
+      send(413, { ok: false, error: 'payload too large', limit: maxBody });
+      req.destroy();
+      return;
+    }
+    chunks.push(c);
+  });
+  req.on('end', () => {
+    if (tooBig) return;
+    cb(Buffer.concat(chunks.map(c => (Buffer.isBuffer(c) ? c : Buffer.from(c)))));
+  });
+}
+
+/**
  * Why this /ui data request is refused, or null if it is allowed.
  *
  * The operator UI is /Applications/vnodes.app: mkmacapp WKWebView on
@@ -164,6 +195,10 @@ function serve(projectRoot) {
   let actualPort = port;
   const boundPort = () => actualPort;
   let owner = false;
+  // The one request-body cap for every POST route below, from this daemon's
+  // config. Computed once here instead of being recomputed per handler.
+  const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
+    ? Number(cfg.mcp.max_body_bytes) : 1048576;
   const server = http.createServer((req, res) => {
     const send = (code, body, type = 'application/json') => {
       res.writeHead(code, { 'content-type': type });
@@ -223,24 +258,9 @@ function serve(projectRoot) {
       if (!String(req.headers['content-type'] || '').startsWith('application/json')) {
         return send(403, { error: 'refused: application/json required' });
       }
-      const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
-        ? Number(cfg.mcp.max_body_bytes) : 1048576;
-      const chunks = [];
-      let size = 0;
-      let tooBig = false;
-      req.on('data', c => {
-        if (tooBig) return;
-        size += c.length;
-        if (size > maxBody) {
-          tooBig = true;
-          send(413, { error: 'payload too large', limit: maxBody });
-          req.destroy();
-        } else chunks.push(c);
-      });
-      req.on('end', () => {
-        if (tooBig) return;
+      collectBody(req, send, maxBody, buf => {
         try {
-          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const body = JSON.parse(buf.toString('utf8') || '{}');
           const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
           if (!ids.length) return send(400, { error: 'ids required' });
           if (ids.length > 200) return send(400, { error: 'too many ids', limit: 200 });
@@ -276,11 +296,9 @@ function serve(projectRoot) {
       const resolved = resolveKb(qn.kb, projectRoot);
       if (!resolved.ok) return send(resolved.code === 'no_default' ? 400 : 404, { ...resolved, hint: 'ids come from /ui/api/kbs' });
       const engDir = engineDirPath(resolved.root);
-      const chunks = [];
-      req.on('data', c => chunks.push(c));
-      req.on('end', () => {
+      collectBody(req, send, maxBody, buf => {
         try {
-          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const body = JSON.parse(buf.toString('utf8') || '{}');
           const out = deleteObservation(engDir, body.id);
           return send(out.ok ? 200 : 404, { kb: resolved.id, ...out });
         } catch (e) {
@@ -303,24 +321,9 @@ function serve(projectRoot) {
       const resolved = resolveKb(q.kb, projectRoot);
       if (!resolved.ok) return send(resolved.code === 'no_default' ? 400 : 404, { ...resolved, hint: 'ids come from /ui/api/kbs' });
       const engDir = engineDirPath(resolved.root);
-      const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
-        ? Number(cfg.mcp.max_body_bytes) : 1048576;
-      const chunks = [];
-      let size = 0;
-      let tooBig = false;
-      req.on('data', c => {
-        if (tooBig) return;
-        size += c.length;
-        if (size > maxBody) {
-          tooBig = true;
-          send(413, { error: 'payload too large', limit: maxBody });
-          req.destroy();
-        } else chunks.push(c);
-      });
-      req.on('end', () => {
-        if (tooBig) return;
+      collectBody(req, send, maxBody, buf => {
         try {
-          const body = JSON.parse(Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8') || '{}');
+          const body = JSON.parse(buf.toString('utf8') || '{}');
           const summary = String(body.summary || '').trim();
           if (!summary) return send(400, { error: 'summary required' });
           captureObservation(engDir, {
@@ -480,26 +483,9 @@ function serve(projectRoot) {
         dlog(`rpc refused: ${denial}`);
         return send(403, { ok: false, error: `refused: ${denial}` });
       }
-      const maxBody = Number(cfg.mcp && cfg.mcp.max_body_bytes) > 0
-        ? Number(cfg.mcp.max_body_bytes) : 1048576;
-      const chunks = [];
-      let size = 0;
-      let tooBig = false;
-      req.on('data', c => {
-        if (tooBig) return;
-        size += c.length;
-        if (size > maxBody) {
-          tooBig = true;
-          send(413, { ok: false, error: 'payload too large', limit: maxBody });
-          req.destroy();
-          return;
-        }
-        chunks.push(c);
-      });
-      req.on('end', () => {
-        if (tooBig) return;
+      collectBody(req, send, maxBody, buf => {
         try {
-          const body = Buffer.concat(chunks.map(c => Buffer.isBuffer(c) ? c : Buffer.from(c))).toString('utf8');
+          const body = buf.toString('utf8');
           const { tool, arguments: args, session } = JSON.parse(body || '{}');
           const result = callTool(projectRoot, tool, args || {}, session || 'http');
           // Same vintage problem as the stdio server: this process has been
@@ -555,7 +541,7 @@ function serve(projectRoot) {
       try {
         const pf = pidFile(null);
         fs.mkdirSync(path.dirname(pf), { recursive: true });
-        fs.writeFileSync(pf, JSON.stringify({ pid: process.pid, port: actualPort }));
+        writePidFile(pf, { pid: process.pid, port: actualPort });
       } catch {}
     }
     // W2. The launch project is listed the first time its daemon runs, which is

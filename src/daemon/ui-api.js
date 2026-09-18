@@ -26,7 +26,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadConfig, engineDirPath } = require('../config');
 const { resolveKb, registryCfg } = require('../registry');
-const { callTool } = require('../tools');
 const { buildCapsule } = require('../capsule');
 const { openStore } = require('../store');
 const { log, logPath } = require('../logs');
@@ -285,18 +284,25 @@ function uiApi(pathname, q, ctx, send) {
   if (pathname === '/ui/api/health') {
     const { llmState, runtimeInfo, runtimeCliFound } = require('../runtime');
     // doctor() is async (it probes the port) and createServer's callback is not,
-    // so the response is written from the promise rather than returned.
-    doctor(root).then(d => send(200, {
-      // Which project these numbers are about, and whether the URL said so or
-      // the daemon fell back to its own. A page that cannot tell the difference
-      // is a page that will eventually show one project's health under
-      // another's name.
-      kb, kb_source: kbSource, project: root,
-      doctor: d,
-      llm: { ...llmState(root), mode: 'runtime-cli', runtime: runtimeInfo(root), runtime_cli_found: runtimeCliFound(root) },
-      config: loadConfig(root),
-      logs: { daemon: tailLog(root, 'daemon'), index: tailLog(root, 'index'), tail_lines: 50 },
-    })).catch(e => send(500, { error: e.message }));
+    // so the response is written from the promise rather than returned. The
+    // payload is built BEFORE send: every value here used to be computed inside
+    // the send() argument, so a throw after the headers were written landed in
+    // the catch below, which tried to answer 500 onto a spent response —
+    // ERR_HTTP_HEADERS_SENT as an unhandled rejection, process-fatal.
+    doctor(root).then(d => {
+      const payload = {
+        // Which project these numbers are about, and whether the URL said so or
+        // the daemon fell back to its own. A page that cannot tell the difference
+        // is a page that will eventually show one project's health under
+        // another's name.
+        kb, kb_source: kbSource, project: root,
+        doctor: d,
+        llm: { ...llmState(root), mode: 'runtime-cli', runtime: runtimeInfo(root), runtime_cli_found: runtimeCliFound(root) },
+        config: loadConfig(root),
+        logs: { daemon: tailLog(root, 'daemon'), index: tailLog(root, 'index'), tail_lines: 50 },
+      };
+      return send(200, payload);
+    }).catch(e => send(500, { error: e.message }));
     return;
   }
   if (pathname === '/ui/api/capsule') {
