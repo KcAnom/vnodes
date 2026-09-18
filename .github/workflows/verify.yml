@@ -31,5 +31,12 @@ jobs:
       # failure — so the toolchain is installed up front, visibly.
       - name: Install the UI toolchain
         run: npm --prefix ui ci
+      # A fresh checkout carries the committed manifest but no index.db
+      # (gitignored). The render checks assert content, so the pages need a
+      # real index to draw; without this they correctly render an empty one
+      # and 8 content checks fail. .vnodes/ is committed — the consent marker
+      # — so indexing here is the project's own opt-in path.
+      - name: Index the checkout so the pages have something to draw
+        run: node bin/vnodes.js index
       - name: Verify (unit tests, build, render checks)
         run: npm run verify
