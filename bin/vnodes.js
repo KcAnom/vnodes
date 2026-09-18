@@ -27,6 +27,48 @@ function realpathOrResolve(p) {
   try { return fs.realpathSync(p); } catch { return path.resolve(p); }
 }
 
+/**
+ * Confirm a detached daemon actually came up before reporting success.
+ *
+ * `daemon start` used to print the child pid and exit 0, and the child could
+ * die a moment later — EADDRINUSE above all — leaving no pidfile, no error,
+ * and a user who believed a daemon existed (verified 2026-08-25: hub start
+ * against an occupied port reported success while the child was already gone).
+ * Three answers, each with its remedy: the child's own pid answers — started;
+ * something else answers the port — name the holder; nothing answers — point
+ * at the log.
+ */
+async function confirmDaemonStart(childPid, port, kind) {
+  const label = kind === 'hub' ? `hub daemon started pid=${childPid} (http://127.0.0.1:${port}/ui/bases)`
+    : `daemon started pid=${childPid} (http://127.0.0.1:${port})`;
+  for (let i = 0; i < 24; i++) {
+    await new Promise(r => setTimeout(r, 250));
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/status`, { signal: AbortSignal.timeout(500) });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.pid === childPid) return label;
+        process.exitCode = 1;
+        return `refused: port ${port} is already held by a daemon pid ${j.pid}`
+          + ` serving ${j.project || '(hub mode)'}`
+          + (j.project ? `; stop it with: vnodes daemon stop --project ${j.project}` : '; it is the hub (/Applications/vnodes.app may own it)')
+          + ` — or set VNODES_PORT`;
+      }
+    } catch {}
+  }
+  process.exitCode = 1;
+  // Nothing answered and nothing answered as a vnodes daemon. Distinguish the
+  // commonest cause — a non-vnodes process holds the port — from the rest.
+  const taken = await new Promise(res => {
+    const s = require('node:net').createServer().once('error', () => res(true)).once('listening', () => { s.close(); res(false); });
+    s.listen(port, '127.0.0.1');
+  });
+  if (taken) {
+    return `failed: port ${port} is held by a process that is not a vnodes daemon — set VNODES_PORT, or free the port`;
+  }
+  return `failed: daemon pid ${childPid} exited without binding port ${port} — check the daemon log for the error`;
+}
+
 function isHomeProject(root) {
   return realpathOrResolve(root) === realpathOrResolve(os.homedir());
 }
@@ -155,12 +197,13 @@ project: resolved upward from cwd (--project <path> to override)`);
       else if (sub === 'start') {
         if (hub) {
           const pid = d.startDetached(null);
-          out(`hub daemon starting pid=${pid} (http://127.0.0.1:${loadConfig(null).mcp.port}/ui/bases)`);
+          out(await confirmDaemonStart(pid, loadConfig(null).mcp.port, 'hub'));
           break;
         }
         const st = d.daemonState(projectRoot);
-        if (st.running) out(`already running pid=${st.pid} port=${st.port}`);
-        else { const pid = d.startDetached(projectRoot); out(`daemon starting pid=${pid} (http://127.0.0.1:${loadConfig(projectRoot).mcp.port})`); }
+        if (st.running) { out(`already running pid=${st.pid} port=${st.port}`); break; }
+        const pid = d.startDetached(projectRoot);
+        out(await confirmDaemonStart(pid, loadConfig(projectRoot).mcp.port, 'project'));
       } else if (sub === 'stop') out(d.stopDaemon(hub ? null : projectRoot));
       else out(d.daemonState(hub ? null : projectRoot));
       break;
