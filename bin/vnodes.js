@@ -6,7 +6,7 @@ process.on('warning', () => {}); // node:sqlite emits ExperimentalWarning on Nod
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { loadConfig, findProjectRoot, engineDir } = require('../src/config');
+const { loadConfig, findProjectRoot, engineDir, isTempRoot } = require('../src/config');
 const { log, logPath } = require('../src/logs');
 
 const argv = process.argv.slice(2);
@@ -76,10 +76,22 @@ function isHomeProject(root) {
 // CLI index/reindex is the human opt-in (tools never take this path). $HOME still
 // needs --force: indexing it produced 541,275 files and never finished.
 function refuseHomeIndex() {
-  if (!isHomeProject(projectRoot) || flags.force) return false;
-  out(`refused: ${projectRoot} is your home directory. Indexing it needs an explicit opt-in: vnodes index --force --project ~`);
-  process.exitCode = 1;
-  return true;
+  if (flags.force) return false;
+  if (isHomeProject(projectRoot)) {
+    out(`refused: ${projectRoot} is your home directory. Indexing it needs an explicit opt-in: vnodes index --force --project ~`);
+    process.exitCode = 1;
+    return true;
+  }
+  // Same blast radius one directory over: an explicit --project at the OS temp
+  // root would index every process's scratch and leave a marker that re-routes
+  // findProjectRoot for every temp directory under it. --force is the same
+  // deliberate opt-in the home refusal honors.
+  if (isTempRoot(projectRoot)) {
+    out(`refused: ${projectRoot} is the operating system temp directory. Indexing it needs an explicit opt-in: vnodes index --force --project ${projectRoot}`);
+    process.exitCode = 1;
+    return true;
+  }
+  return false;
 }
 
 function printHelp() {
@@ -88,7 +100,7 @@ function printHelp() {
 usage: vnodes <command> [args] [--flags]
 
   index                       build/update the graph (incremental via committed manifest).
-                              $HOME is refused unless --force is passed
+                              $HOME and the OS temp directory are refused unless --force is passed
   reindex                     force full re-index (stops daemon, rebuilds store, restarts daemon)
   status                      index + daemon state
   check                       fail if .vnodes/manifest.json does not match the tree (CI)

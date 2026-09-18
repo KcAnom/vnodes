@@ -1,6 +1,7 @@
 'use strict';
 // Config resolution: defaults < .vnodes/config.json < environment variables.
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const DEFAULTS_PATH = path.join(__dirname, '..', 'config', 'defaults.json');
@@ -36,15 +37,60 @@ function loadConfig(projectRoot) {
   return cfg;
 }
 
+/**
+ * The OS temp roots on this machine, in every spelling they answer to.
+ *
+ * os.tmpdir() on macOS is `/var/folders/<…>/T`, whose realpath is
+ * `/private/var/folders/<…>/T`; on Linux it is `/tmp` or `$TMPDIR`. A project
+ * below one of these must never resolve upward past it — the temp root is a
+ * shared landfill, not a project, and a marker there (`.vnodes`, `.git`) is
+ * how one stray index became every temp directory's project (verified live:
+ * a `T/.vnodes` made 5,717 temp files into one knowledge base and re-routed
+ * every fixture in the test suite).
+ */
+let tempRootsCache = null;
+function tempRoots() {
+  if (tempRootsCache) return tempRootsCache;
+  const candidates = process.platform === 'win32'
+    ? [os.tmpdir(), path.join(process.env.SystemRoot || 'C:\\Windows', 'Temp')]
+    : [os.tmpdir(), '/tmp', '/var/tmp'];
+  const set = new Set();
+  for (const c of candidates) {
+    set.add(path.resolve(c));
+    try { set.add(fs.realpathSync(c)); } catch {}
+  }
+  tempRootsCache = set;
+  return set;
+}
+
+/** Is this path an OS temp root itself — not merely a directory inside one? */
+function isTempRoot(p) {
+  const resolved = path.resolve(p);
+  if (tempRoots().has(resolved)) return true;
+  try { return tempRoots().has(fs.realpathSync(p)); } catch { return false; }
+}
+
 // Walk up from cwd to find an existing engine dir or workspace parent pointer;
 // fall back to cwd (indexing starts automatically wherever the project is opened).
 function findProjectRoot(start) {
-  let dir = path.resolve(start || process.cwd());
+  const fallback = path.resolve(start || process.cwd());
+  let dir = fallback;
   while (true) {
     if (fs.existsSync(path.join(dir, ENGINE_DIR))) return dir;
     if (fs.existsSync(path.join(dir, '.git'))) return dir;
     const parent = path.dirname(dir);
-    if (parent === dir) return path.resolve(start || process.cwd());
+    if (parent === dir) return fallback;
+    /**
+     * The walk stops at an OS temp root, the way git stops at a filesystem
+     * boundary. Everything the fall-through below protects against happened
+     * on 2026-09-18: a `.vnodes` appeared in the shared macOS temp root (one
+     * daemon started with its cwd in temp), and from then on every project in
+     * every temp directory — the whole test suite's fixtures — resolved UP to
+     * the temp root and answered from a 5,717-file index nobody indexed on
+     * purpose. A marker below the temp root still resolves normally; the root
+     * itself never claims anything above its own subtrees.
+     */
+    if (isTempRoot(parent)) return fallback;
     dir = parent;
   }
 }
@@ -71,4 +117,4 @@ function engineDirPath(projectRoot) {
   return path.join(projectRoot, ENGINE_DIR);
 }
 
-module.exports = { loadConfig, findProjectRoot, engineDir, engineDirPath, ENGINE_DIR };
+module.exports = { loadConfig, findProjectRoot, engineDir, engineDirPath, isTempRoot, tempRoots, ENGINE_DIR };

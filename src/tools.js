@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { loadConfig, engineDir, engineDirPath } = require('./config');
+const { loadConfig, engineDir, engineDirPath, isTempRoot } = require('./config');
 const { runIndex, indexStatus } = require('./indexer');
 const { buildCapsule } = require('./capsule');
 const { buildSkeleton } = require('./skeleton');
@@ -100,6 +100,19 @@ function knowledgeBaseGate(projectRoot) {
       reason: 'this is your home directory, not a project — vnodes resolved it by walking up from a directory with no .git. Index a real project: vnodes index --project <path>',
     };
   }
+  /**
+   * Same refusal as $HOME, one directory over: the OS temp root is shared by
+   * every process on the machine and wiped on its schedule, and it is where
+   * agents and test fixtures actually stand. A marker dropped there once
+   * claimed every temp directory on the machine — the gate keeps a tool call
+   * made while standing in it from operating on the landfill.
+   */
+  if (isTempRoot(projectRoot)) {
+    return {
+      state: 'refused',
+      reason: 'this is the operating system temp directory, not a project — vnodes resolved it by walking up from a directory with no .git. Index a real project: vnodes index --project <path>',
+    };
+  }
   if (!fs.existsSync(engineDirPath(projectRoot))) {
     return {
       state: 'not_a_knowledge_base',
@@ -158,6 +171,9 @@ function refuseSystemTarget(target) {
   const parsed = path.parse(target);
   if (parsed.root === target) {
     return `refused: ${target} is a volume root, not a project — indexing it would walk every mounted filesystem and never finish. Name a project inside it.`;
+  }
+  if (isTempRoot(target)) {
+    return `refused: ${target} is the operating system temp directory, not a project — indexing it would walk every other process's scratch files and claim every temp directory as one knowledge base. Name a project inside it.`;
   }
   const hit = SYSTEM_ROOTS.find(p => target === p || target.startsWith(p + path.sep));
   if (hit) {

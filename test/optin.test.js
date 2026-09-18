@@ -150,6 +150,63 @@ test('the read-only surface may not create a knowledge base', () => {
   assert.ok(!fs.existsSync(path.join(dir, '.vnodes')));
 });
 
+// ------------------------------------------------------- the temp-root wall
+
+// 2026-09-18, live: a `.vnodes` appeared in the shared macOS temp root (one
+// daemon started with its cwd in temp), and from then on findProjectRoot
+// resolved EVERY temp directory — the whole test suite's fixtures — up to the
+// temp root, whose 5,717-file index answered for projects nobody indexed.
+// These tests pin the wall that makes that accident impossible again.
+
+test('findProjectRoot never ascends into an OS temp root, whatever it holds', () => {
+  const fs2 = require('node:fs');
+  const { spawnSync } = require('node:child_process');
+  const BIN = path.join(__dirname, '..', 'bin', 'vnodes.js');
+  // A fake temp root under a controlled fixture, named os.tmpdir() through
+  // the subprocess's TMPDIR: the exact pollution (a .vnodes in the temp root)
+  // is created where nothing shared can be harmed, never in the real one.
+  const base = fs2.mkdtempSync(path.join(os.tmpdir(), 'vnodes-wall-'));
+  const fakeTmp = path.join(base, 'tmpdir');
+  fs2.mkdirSync(path.join(fakeTmp, '.vnodes'), { recursive: true });
+  const proj = path.join(fakeTmp, 'proj');
+  fs2.mkdirSync(proj);
+  fs2.writeFileSync(path.join(proj, 'a.js'), 'export const a = 1;\n');
+  try {
+    const r = spawnSync(process.execPath, [BIN, 'status'], {
+      cwd: proj, encoding: 'utf8', timeout: 15000,
+      env: { ...process.env, TMPDIR: fakeTmp },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const j = JSON.parse(r.stdout);
+    assert.strictEqual(j.project, fs2.realpathSync(proj),
+      'a marker in the temp root must not claim the project below it');
+  } finally {
+    fs2.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a real project inside temp still resolves to itself by its own markers', () => {
+  const { findProjectRoot, isTempRoot } = require('../src/config');
+  const proj = unopted();
+  fs.mkdirSync(path.join(proj, '.git'));
+  assert.strictEqual(findProjectRoot(proj), proj,
+    'its own .git wins before the walk ever reaches the temp-root boundary');
+  assert.strictEqual(findProjectRoot(path.join(proj, 'src')), proj,
+    'and the walk finds it from a subdirectory too');
+  assert.strictEqual(isTempRoot(proj), false, 'a temp SUBDIR is not a temp root');
+  assert.strictEqual(isTempRoot(os.tmpdir()), true, 'the temp root itself is');
+});
+
+test('the gate and the create tool both refuse the temp root itself', () => {
+  const gate = knowledgeBaseGate(os.tmpdir());
+  assert.equal(gate.state, 'refused');
+  assert.match(gate.reason, /temp directory/);
+  const created = callTool(unopted(), 'create_knowledge_base', { path: os.tmpdir() });
+  assert.equal(created.state, 'refused');
+  assert.ok(!fs.existsSync(path.join(os.tmpdir(), '.vnodes', 'index.db')),
+    'the refusal must not have indexed the shared temp root');
+});
+
 test('list_knowledge_bases works in a directory that is not a knowledge base', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vnodes-listkbs-'));
   const r = callTool(dir, 'list_knowledge_bases', {});
