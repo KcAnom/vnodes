@@ -15,14 +15,14 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       # The render stage refuses to pass without a browser. Install Chrome
       # deterministically and point findChrome at it via CHROME (which
       # scripts/verify.mjs treats as authoritative when set).
-      - uses: browser-actions/setup-chrome@v1
+      - uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
       - name: Point verify at the installed Chrome

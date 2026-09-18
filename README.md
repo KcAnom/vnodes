@@ -110,6 +110,11 @@ missing and stops whatever it started. CI runs the same gate on every push
 and pull request (`.github/workflows/verify.yml`), so a red verify cannot
 merge unnoticed.
 
+A fresh clone needs three one-time steps before it is fully wired: the UI
+toolchain (`npm --prefix ui ci`, verify tells you), an index (`vnodes index`,
+the render stage tells you), and the pre-commit hook (`vnodes hook install`) —
+hooks live in your local `.git/`, so CI cannot carry them to a clone for you.
+
 A stage that cannot run fails the run rather than being skipped quietly — a
 verify that reports a pass while silently omitting its browser stage is the
 same defect this project keeps finding in itself. `npm run verify -- --allow-skip`
