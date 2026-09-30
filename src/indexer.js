@@ -228,35 +228,70 @@ function resolveRustImport(fromFile, spec, fileSet) {
   return probe(selfDir, segs) || probe(crateRootDir(fromFile, fileSet), segs);
 }
 
-// Go imports name package directories via the go.mod module path, not files.
-// Strip the module prefix, then map the package dir to a representative .go
-// file already in the index. External packages have a foreign prefix → null.
-function loadGoModule(repoRoot) {
+// Go imports name package directories via go.mod module paths, not files.
+// A repository can contain multiple nested Go modules, so discover every
+// go.mod and resolve each import against the longest matching module path.
+// External packages have no matching module prefix and remain unresolved.
+function goModuleName(repoRoot, relPath) {
   try {
-    const m = fs.readFileSync(path.join(repoRoot, 'go.mod'), 'utf8').match(/^module\s+(\S+)/m);
+    const body = fs.readFileSync(path.join(repoRoot, relPath), 'utf8');
+    const m = body.match(/^module\s+(\S+)/m);
     return m ? m[1] : null;
   } catch { return null; }
 }
 
-function goPackageDirs(fileSet) {
+function pathInside(relPath, root) {
+  return root === '' || relPath === root || relPath.startsWith(`${root}/`);
+}
+
+function deepestGoModuleRoot(relPath, roots) {
+  return roots.reduce((owner, root) => (
+    pathInside(relPath, root) && root.length > owner.length ? root : owner
+  ), '');
+}
+
+function goPackageDirs(fileSet, moduleRoot = '', moduleRoots = [moduleRoot]) {
   const rep = new Map(); // package dir → representative non-test .go file
   for (const f of fileSet) {
     if (!f.endsWith('.go') || f.endsWith('_test.go')) continue;
-    const d = path.posix.dirname(f);
+    if (deepestGoModuleRoot(f, moduleRoots) !== moduleRoot) continue;
+    const rel = moduleRoot ? f.slice(moduleRoot.length + 1) : f;
+    const d = path.posix.dirname(rel);
     // Prefer <dir>/<dirname>.go (the conventional package anchor), else the
     // lexicographically first file — Go imports name directories, not files.
     const anchor = d === '.' ? null : `${d}/${path.posix.basename(d)}.go`;
     const cur = rep.get(d);
-    if (f === anchor || !cur || (cur !== anchor && f < cur)) rep.set(d, f);
+    const curRel = cur && (moduleRoot ? cur.slice(moduleRoot.length + 1) : cur);
+    if (rel === anchor || !cur || (curRel !== anchor && rel < curRel)) {
+      rep.set(d, f);
+    }
   }
   return rep;
 }
 
-function resolveGoImport(spec, goModule, goDirs) {
-  if (!goModule) return null;
-  if (spec === goModule) return goDirs.get('.') || null;
-  if (!spec.startsWith(goModule + '/')) return null;
-  return goDirs.get(spec.slice(goModule.length + 1)) || null;
+function loadGoModules(repoRoot, files, fileSet) {
+  const moduleFiles = files.filter(f => path.posix.basename(f) === 'go.mod');
+  const roots = moduleFiles.map(f => {
+    const root = path.posix.dirname(f);
+    return root === '.' ? '' : root;
+  });
+  return moduleFiles.map(file => {
+    const root = path.posix.dirname(file) === '.' ? '' : path.posix.dirname(file);
+    return {
+      root,
+      module: goModuleName(repoRoot, file),
+      dirs: goPackageDirs(fileSet, root, roots),
+    };
+  }).filter(m => m.module).sort((a, b) => (
+    b.module.length - a.module.length || b.root.length - a.root.length
+  ));
+}
+
+function resolveGoImport(spec, goModules) {
+  const target = goModules.find(({ module }) => spec === module || spec.startsWith(`${module}/`));
+  if (!target) return null;
+  if (spec === target.module) return target.dirs.get('.') || null;
+  return target.dirs.get(spec.slice(target.module.length + 1)) || null;
 }
 
 // PHP: PSR-4 prefixes from composer.json map namespaces to directories; when a
@@ -429,7 +464,7 @@ function resolveImport(fromFile, spec, fileSet, ctx = {}) {
   if (fromFile.endsWith('.dart')) return resolveDartImport(fromFile, spec, fileSet, ctx.dartRoots || new Map());
   if (fromFile.endsWith('.py')) return resolvePythonImport(fromFile, spec, fileSet);
   if (fromFile.endsWith('.rs')) return resolveRustImport(fromFile, spec, fileSet);
-  if (fromFile.endsWith('.go')) return resolveGoImport(spec, ctx.goModule, ctx.goDirs || new Map());
+  if (fromFile.endsWith('.go')) return resolveGoImport(spec, ctx.goModules || []);
   if (fromFile.endsWith('.php')) return resolvePhpImport(fromFile, spec, fileSet, ctx.phpPsr4 || [], ctx.phpClasses || new Map());
   if (fromFile.endsWith('.swift')) return (ctx.swiftModules || new Map()).get(spec.split('.')[0]) || null;
   if (fromFile.endsWith('.java') || fromFile.endsWith('.kt')) return ctx.jvm ? resolveJvmImport(spec, ctx.jvm) : null;
@@ -515,7 +550,7 @@ function indexRepo(db, repoRoot, alias, cfg, log) {
   const prefix = alias ? `${alias}/` : '';
   const has = ext => { for (const f of fileSet) if (f.endsWith(ext)) return true; return false; };
   const ctx = { aliases };
-  if (has('.go')) { ctx.goModule = loadGoModule(repoRoot); ctx.goDirs = goPackageDirs(fileSet); }
+  if (has('.go')) ctx.goModules = loadGoModules(repoRoot, files, fileSet);
   if (has('.swift')) ctx.swiftModules = swiftModuleMap(fileSet);
   if (has('.dart')) ctx.dartRoots = dartPackageRoots(repoRoot, fileSet);
   // Name→files maps from the symbol table: unchanged files keep their node

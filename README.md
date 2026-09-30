@@ -14,7 +14,9 @@ toolchain. It still reaches no network — the daemon serves it off disk.
 
 - **Indexing** — parses a project into a dependency graph at
   `.vnodes/index.db` (gitignored). `manifest.json` (committed) holds per-file
-  hashes so clones rebuild incrementally. Secret-named files filtered by
+  hashes so clones rebuild incrementally. Go trees discover every nested `go.mod`
+  and resolve imports against the deepest matching module, so monorepos and
+  parent-indexed nested apps retain their package edges. Secret-named files filtered by
   filename boundary (`.env.example` allowlisted); `.gitignore` +
   `.vnodesignore` + `.vnodes_ignore` + default excludes honored; parse-only,
   files > 512KB skipped. A root-level `build/`, `dist/`, or `target/` is excluded

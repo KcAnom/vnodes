@@ -178,6 +178,20 @@ test('go: go.mod module paths anchor on <dir>/<dirname>.go', () => {
   assert.ok(edges.includes('cmd/main.go -> internal/util/util.go'), edges.join('\n'));
 });
 
+test('go: nested go.mod module paths resolve independently', () => {
+  const root = fixture({
+    'go.mod': 'module example.com/monorepo\n\ngo 1.22\n',
+    'cmd/main.go': 'package main\nimport "example.com/monorepo/internal/rootutil"\n',
+    'internal/rootutil/root.go': 'package rootutil\n',
+    'claims-workbench/go.mod': 'module example.com/claims-workbench\n\ngo 1.24\n',
+    'claims-workbench/cmd/app/main.go': 'package main\nimport "example.com/claims-workbench/internal/app"\n',
+    'claims-workbench/internal/app/app.go': 'package app\n',
+  });
+  const edges = edgesOf(root);
+  assert.ok(edges.includes('cmd/main.go -> internal/rootutil/root.go'), edges.join('\\n'));
+  assert.ok(edges.includes('claims-workbench/cmd/app/main.go -> claims-workbench/internal/app/app.go'), edges.join('\\n'));
+});
+
 test('php: PSR-4, unique class reference, ambiguous class stays unresolved', () => {
   const root = fixture({
     'composer.json': '{"autoload":{"psr-4":{"App\\\\":"src/"}}}',
